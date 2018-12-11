@@ -49,7 +49,6 @@
 /* Different ways to stop the CPU */
 #define STOP_LEVEL_STOP 1
 #define STOP_LEVEL_HALT 2
-#define STOP_LEVEL_WAIT 4
 
 /* Used for 68000 address error processing */
 #if M68K_EMULATE_ADDRESS_ERROR
@@ -335,7 +334,7 @@
     }
 
   #define m68ki_check_address_error(ADDR, WRITE_MODE, FC) \
-    if(UNLIKELY((ADDR)&1)) \
+    if((ADDR)&1) \
     { \
       if (m68ki_cpu.aerr_enabled) \
       { \
@@ -612,12 +611,12 @@ static const uint16 m68ki_exception_cycle_table[256] =
      50*MUL, /*  3: Address Error                         (unemulated) */
      34*MUL, /*  4: Illegal Instruction                                */
      38*MUL, /*  5: Divide by Zero -- ASG: changed from 42             */
-     38*MUL, /*  6: CHK -- ASG: changed from 44                        */
+     40*MUL, /*  6: CHK -- ASG: chanaged from 44                       */
      34*MUL, /*  7: TRAPV                                              */
      34*MUL, /*  8: Privilege Violation                                */
      34*MUL, /*  9: Trace                                              */
-     34*MUL, /* 10: 1010                                               */
-     34*MUL, /* 11: 1111                                               */
+      4*MUL, /* 10: 1010                                               */
+      4*MUL, /* 11: 1111                                               */
       4*MUL, /* 12: RESERVED                                           */
       4*MUL, /* 13: Coprocessor Protocol Violation        (unemulated) */
       4*MUL, /* 14: Format Error                                       */
@@ -631,13 +630,13 @@ static const uint16 m68ki_exception_cycle_table[256] =
       4*MUL, /* 22: RESERVED                                           */
       4*MUL, /* 23: RESERVED                                           */
      44*MUL, /* 24: Spurious Interrupt                                 */
-     44*MUL, /* 25: Level 1 Interrupt Autovector                       */
-     44*MUL, /* 26: Level 2 Interrupt Autovector                       */
-     44*MUL, /* 27: Level 3 Interrupt Autovector                       */
-     44*MUL, /* 28: Level 4 Interrupt Autovector                       */
-     44*MUL, /* 29: Level 5 Interrupt Autovector                       */
-     44*MUL, /* 30: Level 6 Interrupt Autovector                       */
-     44*MUL, /* 31: Level 7 Interrupt Autovector                       */
+     54*MUL, /* 25: Level 1 Interrupt Autovector                       */
+     54*MUL, /* 26: Level 2 Interrupt Autovector                       */
+     54*MUL, /* 27: Level 3 Interrupt Autovector                       */
+     54*MUL, /* 28: Level 4 Interrupt Autovector                       */
+     54*MUL, /* 29: Level 5 Interrupt Autovector                       */
+     54*MUL, /* 30: Level 6 Interrupt Autovector                       */
+     54*MUL, /* 31: Level 7 Interrupt Autovector                       */
      34*MUL, /* 32: TRAP #0 -- ASG: chanaged from 38                   */
      34*MUL, /* 33: TRAP #1                                            */
      34*MUL, /* 34: TRAP #2                                            */
@@ -798,28 +797,20 @@ INLINE void m68ki_check_interrupts(void);            /* ASG: check for interrupt
  */
 INLINE uint m68ki_read_imm_16(void)
 {
-#if M68K_EMULATE_PREFETCH
-  uint temp_val;
   m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_PROGRAM) /* auto-disable (see m68kcpu.h) */
 #if M68K_CHECK_PC_ADDRESS_ERROR
   m68ki_check_address_error(REG_PC, MODE_READ, FLAG_S | FUNCTION_CODE_USER_PROGRAM) /* auto-disable (see m68kcpu.h) */
 #endif
-  if(REG_PC != CPU_PREF_ADDR)
+#if M68K_EMULATE_PREFETCH
+  if(MASK_OUT_BELOW_2(REG_PC) != CPU_PREF_ADDR)
   {
-    CPU_PREF_ADDR = REG_PC;
-    CPU_PREF_DATA = m68k_read_immediate_16(REG_PC);
+    CPU_PREF_ADDR = MASK_OUT_BELOW_2(REG_PC);
+    CPU_PREF_DATA = m68k_read_immediate_32(CPU_PREF_ADDR);
   }
-  temp_val = CPU_PREF_DATA;
   REG_PC += 2;
-  CPU_PREF_ADDR = REG_PC;
-  CPU_PREF_DATA = m68k_read_immediate_16(REG_PC);
-  return temp_val;
+  return MASK_OUT_ABOVE_16(CPU_PREF_DATA >> ((2-((REG_PC-2)&2))<<3));
 #else
   uint pc = REG_PC;
-  m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_PROGRAM) /* auto-disable (see m68kcpu.h) */
-#if M68K_CHECK_PC_ADDRESS_ERROR
-  m68ki_check_address_error(REG_PC, MODE_READ, FLAG_S | FUNCTION_CODE_USER_PROGRAM) /* auto-disable (see m68kcpu.h) */
-#endif
   REG_PC += 2;
   return m68k_read_immediate_16(pc);
 #endif /* M68K_EMULATE_PREFETCH */
@@ -829,28 +820,33 @@ INLINE uint m68ki_read_imm_32(void)
 {
 #if M68K_EMULATE_PREFETCH
   uint temp_val;
+
   m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_PROGRAM) /* auto-disable (see m68kcpu.h) */
 #if M68K_CHECK_PC_ADDRESS_ERROR
   m68ki_check_address_error(REG_PC, MODE_READ, FLAG_S | FUNCTION_CODE_USER_PROGRAM) /* auto-disable (see m68kcpu.h) */
 #endif
-  if(REG_PC != CPU_PREF_ADDR)
+  if(MASK_OUT_BELOW_2(REG_PC) != CPU_PREF_ADDR)
   {
-    CPU_PREF_ADDR = REG_PC;
-    CPU_PREF_DATA = m68k_read_immediate_16(REG_PC);
+    CPU_PREF_ADDR = MASK_OUT_BELOW_2(REG_PC);
+    CPU_PREF_DATA = m68k_read_immediate_32(CPU_PREF_ADDR);
   }
   temp_val = CPU_PREF_DATA;
   REG_PC += 2;
-  temp_val = (temp_val << 16) | m68k_read_immediate_16(REG_PC);
+  if(MASK_OUT_BELOW_2(REG_PC) != CPU_PREF_ADDR)
+  {
+    CPU_PREF_ADDR = MASK_OUT_BELOW_2(REG_PC);
+    CPU_PREF_DATA = m68k_read_immediate_32(CPU_PREF_ADDR);
+    temp_val = MASK_OUT_ABOVE_32((temp_val << 16) | (CPU_PREF_DATA >> 16));
+  }
   REG_PC += 2;
-  CPU_PREF_ADDR = REG_PC;
-  CPU_PREF_DATA = m68k_read_immediate_16(REG_PC);
+
   return temp_val;
 #else
-  uint pc = REG_PC;
   m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_PROGRAM) /* auto-disable (see m68kcpu.h) */
 #if M68K_CHECK_PC_ADDRESS_ERROR
   m68ki_check_address_error(REG_PC, MODE_READ, FLAG_S | FUNCTION_CODE_USER_PROGRAM) /* auto-disable (see m68kcpu.h) */
 #endif
+  uint pc = REG_PC;
   REG_PC += 4;
   return m68k_read_immediate_32(pc);
 #endif /* M68K_EMULATE_PREFETCH */
@@ -939,11 +935,6 @@ INLINE void m68ki_write_8(uint address, uint value)
 
   check_breakpoint(BPT_M68K_W, 1, address, value);
 
-#ifdef HOOK_CPU
-  if (UNLIKELY(cpu_hook))
-    cpu_hook(HOOK_M68K_W, 1, address, value);
-#endif
-
   temp = &m68ki_cpu.memory_map[((address)>>16)&0xff];
   if (temp->write8) (*temp->write8)(ADDRESS_68K(address),value);
   else WRITE_BYTE(temp->base, (address) & 0xffff, value);
@@ -975,11 +966,6 @@ INLINE void m68ki_write_32(uint address, uint value)
   m68ki_check_address_error(address, MODE_WRITE, FLAG_S | FUNCTION_CODE_USER_DATA); /* auto-disable (see m68kcpu.h) */
 
   check_breakpoint(BPT_M68K_W, 4, address, value);
-
-#ifdef HOOK_CPU
-  if (UNLIKELY(cpu_hook))
-    cpu_hook(HOOK_M68K_W, 4, address, value);
-#endif
 
   temp = &m68ki_cpu.memory_map[((address)>>16)&0xff];
   if (temp->write16) (*temp->write16)(ADDRESS_68K(address),value>>16);
@@ -1404,11 +1390,6 @@ INLINE void m68ki_exception_address_error(void)
 }
 #endif
 
-/* See MC68000 User Manual appendix B for autovectors interrupts processing time */
-/* 44 cycles + N wait-state cycles where N depends on CPU clock alignement with internal E clock (corresponding to CPU clock  / 10) when interrupt ack cycle starts */
-/* N minimal/maximal values are 6..15 cycles according to manual but real hardware measure apparently indicate 5..14 cycles (cf https://gendev.spritesmind.net/forum/viewtopic.php?f=2&t=2202&p=27485) */
-static uint m68ki_cycle_interrupts[10] = {50*MUL, 59*MUL, 58*MUL, 57*MUL, 56*MUL, 55*MUL, 54*MUL, 53*MUL, 52*MUL, 51*MUL};
-
 /* Service an interrupt request and start exception processing */
 INLINE void m68ki_exception_interrupt(uint int_level)
 {
@@ -1419,7 +1400,7 @@ INLINE void m68ki_exception_interrupt(uint int_level)
   #endif /* M68K_EMULATE_ADDRESS_ERROR */
 
   /* Turn off the stopped state */
-  CPU_STOPPED &= (STOP_LEVEL_HALT | STOP_LEVEL_WAIT);
+  CPU_STOPPED &= STOP_LEVEL_HALT;
 
   /* If we are halted, don't do anything */
   if(CPU_STOPPED)
@@ -1456,7 +1437,7 @@ INLINE void m68ki_exception_interrupt(uint int_level)
   m68ki_jump(new_pc);
 
   /* Update cycle count now */
-  USE_CYCLES(m68ki_cycle_interrupts[(m68ki_cpu.cycles / MUL) % 10]);
+  USE_CYCLES(CYC_EXCEPTION[vector]);
 }
 
 /* ASG: Check for interrupts */

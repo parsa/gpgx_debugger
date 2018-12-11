@@ -4,6 +4,7 @@
 
 extern int vdp_68k_irq_ack(int int_level);
 extern void process_breakpoints();
+extern void m68k_instr_callback();
 
 #define m68ki_cpu m68k
 #define MUL (7)
@@ -205,8 +206,7 @@ void m68k_set_fc_callback(void  (*callback)(unsigned int new_fc))
 }
 #endif
 
-#ifdef LOGERROR
-
+#ifdef LOGVDP
 extern void error(char *format, ...);
 extern uint16 v_counter;
 #endif
@@ -220,8 +220,8 @@ void m68k_update_irq(unsigned int mask)
   /* Update IRQ level */
   CPU_INT_LEVEL |= (mask << 8);
   
-#ifdef LOGERROR
-  error("[%d(%d)][%d(%d)] m68k IRQ Level = %d(0x%02x) (%x)\n", v_counter, m68k.cycles/3420, m68k.cycles, m68k.cycles%3420,CPU_INT_LEVEL>>8,FLAG_INT_MASK,m68k_get_reg(M68K_REG_PC));
+#ifdef LOGVDP
+  error("[%d(%d)][%d(%d)] IRQ Level = %d(0x%02x) (%x)\n", v_counter, m68k.cycles/3420, m68k.cycles, m68k.cycles%3420,CPU_INT_LEVEL>>8,FLAG_INT_MASK,m68k_get_reg(M68K_REG_PC));
 #endif
 }
 
@@ -230,8 +230,8 @@ void m68k_set_irq(unsigned int int_level)
   /* Set IRQ level */
   CPU_INT_LEVEL = int_level << 8;
   
-#ifdef LOGERROR
-  error("[%d(%d)][%d(%d)] m68k IRQ Level = %d(0x%02x) (%x)\n", v_counter, m68k.cycles/3420, m68k.cycles, m68k.cycles%3420,CPU_INT_LEVEL>>8,FLAG_INT_MASK,m68k_get_reg(M68K_REG_PC));
+#ifdef LOGVDP
+  error("[%d(%d)][%d(%d)] IRQ Level = %d(0x%02x) (%x)\n", v_counter, m68k.cycles/3420, m68k.cycles, m68k.cycles%3420,CPU_INT_LEVEL>>8,FLAG_INT_MASK,m68k_get_reg(M68K_REG_PC));
 #endif
 }
 
@@ -265,12 +265,17 @@ void m68k_set_irq_delay(unsigned int int_level)
     CPU_INT_LEVEL = int_level << 8;
   }
   
-#ifdef LOGERROR
-  error("[%d(%d)][%d(%d)] m68k IRQ Level = %d(0x%02x) (%x)\n", v_counter, m68k.cycles/3420, m68k.cycles, m68k.cycles%3420,CPU_INT_LEVEL>>8,FLAG_INT_MASK,m68k_get_reg(M68K_REG_PC));
+#ifdef LOGVDP
+  error("[%d(%d)][%d(%d)] IRQ Level = %d(0x%02x) (%x)\n", v_counter, m68k.cycles/3420, m68k.cycles, m68k.cycles%3420,CPU_INT_LEVEL>>8,FLAG_INT_MASK,m68k_get_reg(M68K_REG_PC));
 #endif
 
   /* Check interrupt mask to process IRQ  */
   m68ki_check_interrupts(); /* Level triggered (IRQ) */
+}
+
+void m68k_instr_callback()
+{
+    //process_debug();
 }
 
 void m68k_run(unsigned int cycles) 
@@ -317,21 +322,12 @@ void m68k_run(unsigned int cycles)
     /* Call external hook to peek at CPU */
     m68ki_instr_hook(); /* auto-disable (see m68kcpu.h) */
 
-    /* Record previous program counter */
-    REG_PPC = REG_PC;
 
     /* Record previous program counter */
     REG_PPC = REG_PC;
 
     /* Decode next instruction */
     REG_IR = m68ki_read_imm_16();
-
-    /* 68K bus access refresh delay (Mega Drive / Genesis specific) */
-    if (m68k.cycles >= m68k.refresh_cycles)
-    {
-      m68k.refresh_cycles = m68k.cycles + (128*7);
-      m68k.cycles += (2*7);
-    }
 
     /* Execute instruction */
     m68ki_instruction_jump_table[REG_IR]();
@@ -422,9 +418,6 @@ void m68k_pulse_reset(void)
 #endif
 
   USE_CYCLES(CYC_EXCEPTION[EXCEPTION_RESET]);
-
-  /* Synchronize 68k bus refresh mechanism (Mega Drive / Genesis specific) */
-  m68k.refresh_cycles = ((m68k.cycles / (128*7)) * (128*7)) + 128*7;
 }
 
 void m68k_pulse_halt(void)
