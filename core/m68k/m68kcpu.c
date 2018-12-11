@@ -3,7 +3,7 @@
 /* ======================================================================== */
 
 extern int vdp_68k_irq_ack(int int_level);
-extern void process_breakpoints();
+extern void m68k_instr_callback();
 
 #define m68ki_cpu m68k
 #define MUL (7)
@@ -272,6 +272,11 @@ void m68k_set_irq_delay(unsigned int int_level)
   m68ki_check_interrupts(); /* Level triggered (IRQ) */
 }
 
+void m68k_instr_callback()
+{
+    //process_debug();
+}
+
 void m68k_run(unsigned int cycles) 
 {
   /* Make sure CPU is not already ahead */
@@ -316,9 +321,6 @@ void m68k_run(unsigned int cycles)
     /* Call external hook to peek at CPU */
     m68ki_instr_hook(); /* auto-disable (see m68kcpu.h) */
 
-
-    /* Record previous program counter */
-    REG_PPC = REG_PC;
 
     /* Record previous program counter */
     REG_PPC = REG_PC;
