@@ -219,6 +219,7 @@ typedef enum
 #endif
 
   /* Convenience registers */
+  M68K_REG_PPC,	 /* Previous value in the program counter */
   M68K_REG_IR    /* Instruction register */
 } m68k_register_t;
 
@@ -252,6 +253,7 @@ typedef struct
   uint cycle_end;       /* aimed master cycle count for current execution frame */
 
   uint dar[16];         /* Data and Address Registers */
+  uint ppc;             /* Previous program counter */
   uint pc;              /* Program Counter */
   uint prev_pc;         /* Previous Program Counter */
   uint prev_dr[8];      /* Previous Data Registers */
@@ -293,6 +295,7 @@ typedef struct
   void (*reset_instr_callback)(void);               /* Called when a RESET instruction is encountered */
   int  (*tas_instr_callback)(void);                 /* Called when a TAS instruction is encountered, allows / disallows writeback */
   void (*set_fc_callback)(unsigned int new_fc);     /* Called when the CPU function code changes */
+  void (*instr_hook_callback)(void);                /* Called every instruction cycle prior to execution */
 } m68ki_cpu_core;
 
 /* CPU cores */

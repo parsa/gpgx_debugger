@@ -3,6 +3,7 @@
 /* ======================================================================== */
 
 extern int vdp_68k_irq_ack(int int_level);
+extern void m68k_instr_callback();
 
 #define m68ki_cpu m68k
 #define MUL (7)
@@ -71,6 +72,13 @@ static void default_set_fc_callback(unsigned int new_fc)
 }
 #endif
 
+#if M68K_INSTRUCTION_HOOK == OPT_ON
+/* Called every instruction cycle prior to execution */
+static void default_instr_hook_callback(void)
+{
+}
+#endif
+
 
 /* ======================================================================== */
 /* ================================= API ================================== */
@@ -113,6 +121,7 @@ unsigned int m68k_get_reg(m68k_register_t regnum)
     case M68K_REG_PREF_ADDR:  return m68ki_cpu.pref_addr;
     case M68K_REG_PREF_DATA:  return m68ki_cpu.pref_data;
 #endif
+    case M68K_REG_PPC:	return MASK_OUT_ABOVE_32(m68ki_cpu.ppc);
     case M68K_REG_IR:  return m68ki_cpu.ir;
     default:      return 0;
   }
@@ -151,6 +160,7 @@ void m68k_set_reg(m68k_register_t regnum, unsigned int value)
               else
                 REG_ISP = MASK_OUT_ABOVE_32(value);
               return;
+    case M68K_REG_PPC:	REG_PPC = MASK_OUT_ABOVE_32(value); return;
     case M68K_REG_IR:  REG_IR = MASK_OUT_ABOVE_16(value); return;
 #if M68K_EMULATE_PREFETCH
     case M68K_REG_PREF_ADDR:  CPU_PREF_ADDR = MASK_OUT_ABOVE_32(value); return;
@@ -178,6 +188,13 @@ void m68k_set_reset_instr_callback(void  (*callback)(void))
 void m68k_set_tas_instr_callback(int  (*callback)(void))
 {
   CALLBACK_TAS_INSTR = callback ? callback : default_tas_instr_callback;
+}
+#endif
+
+#if M68K_INSTRUCTION_HOOK == OPT_ON
+void m68k_set_instr_hook_callback(void(*callback)(void))
+{
+  CALLBACK_INSTR_HOOK = callback ? callback : default_instr_hook_callback;
 }
 #endif
 
@@ -236,6 +253,8 @@ void m68k_set_irq_delay(unsigned int int_level)
       irq_latency = 1;
       m68ki_trace_t1() /* auto-disable (see m68kcpu.h) */
       m68ki_use_data_space() /* auto-disable (see m68kcpu.h) */
+      m68ki_instr_hook(); /* auto-disable (see m68kcpu.h) */
+      REG_PPC = REG_PC;
       REG_IR = m68ki_read_imm_16();
       m68ki_instruction_jump_table[REG_IR]();
       m68ki_exception_if_trace() /* auto-disable (see m68kcpu.h) */
@@ -252,6 +271,11 @@ void m68k_set_irq_delay(unsigned int int_level)
 
   /* Check interrupt mask to process IRQ  */
   m68ki_check_interrupts(); /* Level triggered (IRQ) */
+}
+
+void m68k_instr_callback()
+{
+    //process_debug();
 }
 
 void m68k_run(unsigned int cycles) 
@@ -295,6 +319,11 @@ void m68k_run(unsigned int cycles)
     if (UNLIKELY(cpu_hook))
       cpu_hook(HOOK_M68K_E, 0, REG_PC, 0);
 #endif
+    /* Call external hook to peek at CPU */
+    m68ki_instr_hook(); /* auto-disable (see m68kcpu.h) */
+
+    /* Record previous program counter */
+    REG_PPC = REG_PC;
 
     /* Decode next instruction */
     REG_IR = m68ki_read_imm_16();
@@ -351,6 +380,9 @@ void m68k_init(void)
 #endif
 #if M68K_EMULATE_FC == OPT_ON
   m68k_set_fc_callback(NULL);
+#endif
+#if M68K_INSTRUCTION_HOOK == OPT_ON
+  m68k_set_instr_hook_callback(NULL);
 #endif
 }
 

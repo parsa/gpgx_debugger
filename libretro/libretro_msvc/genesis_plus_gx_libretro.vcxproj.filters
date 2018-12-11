@@ -393,6 +393,9 @@
     <ClCompile Include="..\..\core\cd_hw\libchdr\deps\zstd-1.5.6\lib\common\zstd_common.c">
       <Filter>core\cd_hw\libchdr\deps\zstd-1.5.6\common</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\core\debug\debug.c">
+      <Filter>core\debug</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\core\genesis.h">
@@ -742,6 +745,9 @@
     </ClInclude>
     <ClInclude Include="..\..\core\input_hw\smash.h">
       <Filter>core\input_hw</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\core\debug\debug.h">
+      <Filter>core\debug</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>
