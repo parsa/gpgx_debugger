@@ -46,6 +46,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+#include "gui.h"
+
 #ifdef _MSC_VER
 #define snprintf _snprintf
 #endif
@@ -3722,6 +3724,8 @@ void retro_init(void)
    retro_audio_buff_underrun  = false;
    audio_latency              = 0;
    update_audio_latency       = false;
+
+   run_gui();
 }
 
 void retro_deinit(void)
@@ -3731,6 +3735,7 @@ void retro_deinit(void)
 
    g_rom_data = NULL;
    g_rom_size = 0;
+    stop_gui();
 }
 
 void retro_reset(void)
@@ -3876,6 +3881,7 @@ void retro_run(void)
    }
 
    audio_cb(soundbuffer, audio_update(soundbuffer));
+   update_gui();
 }
 
 #undef  CHUNKSIZE

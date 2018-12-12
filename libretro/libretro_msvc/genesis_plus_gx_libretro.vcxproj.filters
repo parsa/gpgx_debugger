@@ -88,6 +88,15 @@
     <Filter Include="core\sound\minimp3">
       <UniqueIdentifier>{4fc931a3-79a7-4e20-8d92-771334c9b587}</UniqueIdentifier>
     </Filter>
+    <Filter Include="gui">
+      <UniqueIdentifier>{357b5374-8d68-4498-a99c-2f6ca932c610}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="gui\plane_explorer">
+      <UniqueIdentifier>{81217aec-2095-4fa9-8aca-bf1ef7c689d7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="gui\vdp_ram">
+      <UniqueIdentifier>{d268b114-681d-4146-b3c1-e56adb447a66}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\core\genesis.c">
@@ -395,6 +404,15 @@
     </ClCompile>
     <ClCompile Include="..\..\core\debug\debug.c">
       <Filter>core\debug</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\gui\gui.c">
+      <Filter>gui</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\gui\plane_explorer.c">
+      <Filter>gui\plane_explorer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\gui\vdp_ram_debug.cpp">
+      <Filter>gui\vdp_ram</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -749,5 +767,22 @@
     <ClInclude Include="..\..\core\debug\debug.h">
       <Filter>core\debug</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\gui\gui.h">
+      <Filter>gui</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\gui\resource.h">
+      <Filter>gui</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\gui\plane_explorer.h">
+      <Filter>gui\plane_explorer</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\gui\vdp_ram_debug.h">
+      <Filter>gui\vdp_ram</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="..\..\gui\gui.rc">
+      <Filter>gui</Filter>
+    </ResourceCompile>
   </ItemGroup>
 </Project>
