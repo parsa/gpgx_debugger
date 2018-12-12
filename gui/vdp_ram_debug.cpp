@@ -11,10 +11,10 @@
 #include <Windowsx.h>
 #include <string>
 #include <vector>
+#include <sstream>
+#include <iomanip>
 
 #include "resource.h"
-
-#include "edit_fields.h"
 
 #include "shared.h"
 #include "vdp_ctrl.h"
@@ -24,10 +24,9 @@
 #include "vdp_ram_debug.h"
 
 HWND VDPRamHWnd = NULL;
-static HANDLE hThread = NULL;
 
-static int VDPRamPal, VDPRamTile;
-static bool IsVRAM;
+int VDPRamPal, VDPRamTile;
+bool IsVRAM;
 
 #define VDP_PAL_COUNT 4
 #define VDP_PAL_COLORS 16
@@ -65,9 +64,80 @@ void WndProcDialogImplementSaveFieldWhenLostFocus(HWND hwnd, UINT msg, WPARAM wp
         //the user clicks an unused area of the window.
     case WM_LBUTTONDOWN:
     case WM_SHOWWINDOW:
-        SendMessage(hwnd, WM_COMMAND, MAKEWPARAM(0, EN_SETFOCUS), 0);
+        SendMessage(hwnd, WM_COMMAND, MAKEWPARAM(0, EN_SETFOCUS), NULL);
         SetFocus(NULL);
         break;
+    }
+}
+
+//----------------------------------------------------------------------------------------
+std::string GetDlgItemString(HWND hwnd, int controlID)
+{
+    std::string result;
+
+    const unsigned int maxTextLength = 1024;
+    char currentTextTemp[maxTextLength];
+    if (GetDlgItemText(hwnd, controlID, currentTextTemp, maxTextLength) == 0)
+    {
+        currentTextTemp[0] = '\0';
+    }
+    result = currentTextTemp;
+
+    return result;
+}
+
+//----------------------------------------------------------------------------------------
+unsigned int GetDlgItemHex(HWND hwnd, int controlID)
+{
+    unsigned int value = 0;
+
+    const unsigned int maxTextLength = 1024;
+    char currentTextTemp[maxTextLength];
+    if (GetDlgItemText(hwnd, controlID, currentTextTemp, maxTextLength) == 0)
+    {
+        currentTextTemp[0] = '\0';
+    }
+    std::stringstream buffer;
+    buffer << std::hex << currentTextTemp;
+    buffer >> value;
+
+    return value;
+}
+
+//----------------------------------------------------------------------------------------
+void UpdateDlgItemHex(HWND hwnd, int controlID, unsigned int width, unsigned int data)
+{
+    const unsigned int maxTextLength = 1024;
+    char currentTextTemp[maxTextLength];
+    if (GetDlgItemText(hwnd, controlID, currentTextTemp, maxTextLength) == 0)
+    {
+        currentTextTemp[0] = '\0';
+    }
+    std::string currentText = currentTextTemp;
+    std::stringstream text;
+    text << std::setw(width) << std::setfill('0') << std::hex << std::uppercase;
+    text << data;
+    if (text.str() != currentText)
+    {
+        SetDlgItemText(hwnd, controlID, text.str().c_str());
+    }
+}
+
+//----------------------------------------------------------------------------------------
+void UpdateDlgItemBin(HWND hwnd, int controlID, unsigned int data)
+{
+    const unsigned int maxTextLength = 1024;
+    char currentTextTemp[maxTextLength];
+    if (GetDlgItemText(hwnd, controlID, currentTextTemp, maxTextLength) == 0)
+    {
+        currentTextTemp[0] = '\0';
+    }
+    std::string currentText = currentTextTemp;
+    std::stringstream text;
+    text << data;
+    if (text.str() != currentText)
+    {
+        SetDlgItemText(hwnd, controlID, text.str().c_str());
     }
 }
 
@@ -766,7 +836,7 @@ INT_PTR msgRegistersWM_INITDIALOG(HWND hDlg, WPARAM wparam, LPARAM lparam)
         //Create the dialog window for this tab
         DLGPROC dialogWindowProc = tabItems[i].dialogProc;
         LPCSTR dialogTemplateName = MAKEINTRESOURCE(tabItems[i].dialogID);
-        tabItems[i].hwndDialog = CreateDialogParam(pinst, dialogTemplateName, GetDlgItem(hDlg, IDC_VDP_REGISTERS_TABCONTROL), dialogWindowProc, (LPARAM)1);
+        tabItems[i].hwndDialog = CreateDialogParam(dbg_wnd_hinst, dialogTemplateName, GetDlgItem(hDlg, IDC_VDP_REGISTERS_TABCONTROL), dialogWindowProc, (LPARAM)1);
 
         //Calculate the required size of the window for this tab in pixel units
         RECT rect;
@@ -837,7 +907,7 @@ INT_PTR msgRegistersWM_INITDIALOG(HWND hDlg, WPARAM wparam, LPARAM lparam)
     return TRUE;
 }
 
-static void redraw_vdp_view()
+void Redraw_VDP_View()
 {
     if (!VDPRamHWnd) return;
 
@@ -997,7 +1067,6 @@ LRESULT CALLBACK ButtonsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
                 FILE *in = fopen(fname, "rb");
                 fread(cram, 1, sizeof(cram), in);
                 fclose(in);
-                redraw_vdp_view();
             }
             return FALSE;
         } break;
@@ -1065,7 +1134,6 @@ LRESULT CALLBACK ButtonsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
 				((char*)&cram)[(VDP_PAL_COLORS * 2 + i) * 2 + 0] = (w >> 0) & 0xFF;
 				((char*)&cram)[(VDP_PAL_COLORS * 2 + i) * 2 + 1] = (w >> 8) & 0xFF;
 			}
-            redraw_vdp_view();
 
 			return FALSE;
 		} break;
@@ -1090,20 +1158,19 @@ LRESULT CALLBACK ButtonsProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
                 FILE *in = fopen(fname, "rb");
                 fread(vram, 1, sizeof(vram), in);
                 fclose(in);
-                redraw_vdp_view();
             }
             return FALSE;
         } break;
         case IDC_VDP_VIEW_VRAM:
         {
             IsVRAM = true;
-            redraw_vdp_view();
+            Redraw_VDP_View();
             return FALSE;
         } break;
         case IDC_VDP_VIEW_RAM:
         {
             IsVRAM = false;
-            redraw_vdp_view();
+            Redraw_VDP_View();
             return FALSE;
         } break;
         }
@@ -1129,7 +1196,7 @@ LRESULT CALLBACK VDPRamProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
         memset(&r, 0, sizeof(r));
 
-        GetWindowRect(rarch, &r);
+        GetWindowRect(dbg_window, &r);
         dx1 = (r.right - r.left) / 2;
         dy1 = (r.bottom - r.top) / 2;
 
@@ -1558,7 +1625,7 @@ LRESULT CALLBACK VDPRamProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
         } break;
         }
         SetScrollPos(GetDlgItem(hDlg, IDC_VDP_TILES_SCROLLBAR), SB_CTL, CurPos, TRUE);
-        redraw_vdp_view();
+        Redraw_VDP_View();
     } break;
 
     case WM_LBUTTONDOWN:
@@ -1575,7 +1642,7 @@ LRESULT CALLBACK VDPRamProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
         if (PtInRect(&r, pt))
         {
             VDPRamPal = (pt.y - r.top) / VDP_BLOCK_H;
-            redraw_vdp_view();
+            Redraw_VDP_View();
         }
         else
         {
@@ -1589,14 +1656,14 @@ LRESULT CALLBACK VDPRamProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 int col = (pt.x - r.left) / VDP_BLOCK_W;
                 VDPRamTile = row * VDP_TILES_IN_ROW + col;
 
-                redraw_vdp_view();
+                Redraw_VDP_View();
             }
         }
     } break;
 
     case UpdateMSG:
     {
-        redraw_vdp_view();
+        Redraw_VDP_View();
     } break;
 
     case WM_CLOSE:
@@ -1608,69 +1675,40 @@ LRESULT CALLBACK VDPRamProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
 
         VDPRamHWnd = NULL;
-        PostQuitMessage(0);
-        EndDialog(hDlg, 0);
-        
-        if (hThread) {
-            CloseHandle(hThread);
-            hThread = 0;
-        }
-
-        return TRUE;
+        EndDialog(hDlg, true);
+        return true;
     } break;
     }
 
-    return FALSE;
+    return false;
 }
 
-static DWORD WINAPI ThreadProc(LPVOID lpParam)
+DWORD WINAPI ThreadProc(LPVOID lpParam)
 {
-    MSG msg;
+    MSG messages;
 
-    VDPRamHWnd = CreateDialog(pinst, MAKEINTRESOURCE(IDD_VDPRAM), rarch, (DLGPROC)VDPRamProc);
-    ShowWindow(VDPRamHWnd, SW_SHOW);
-    UpdateWindow(VDPRamHWnd);
-    SetForegroundWindow(VDPRamHWnd);
+    VDPRamHWnd = CreateDialog(dbg_wnd_hinst, MAKEINTRESOURCE(IDD_VDPRAM), dbg_window, (DLGPROC)VDPRamProc);
 
-    HANDLE hMutex = CreateMutex(NULL, FALSE, VDP_RAM_MUTEX);
-
-    while (GetMessage(&msg, NULL, 0, 0))
+    while (GetMessage(&messages, VDPRamHWnd, 0, 0))
     {
-        if (!IsDialogMessage(VDPRamHWnd, &msg))
-        {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
+        TranslateMessage(&messages);
+        DispatchMessage(&messages);
 	}
-
-    CloseHandle(hMutex);
 
     return 1;
 }
 
 void create_vdp_ram_debug()
 {
-    if (VDPRamHWnd == NULL) {
-        hThread = CreateThread(0, NULL, ThreadProc, NULL, NULL, NULL);
-    }
+    CreateThread(0, NULL, ThreadProc, NULL, NULL, NULL);
 }
 
 void destroy_vdp_ram_debug()
 {
-    if (VDPRamHWnd) {
-        SendMessage(VDPRamHWnd, WM_CLOSE, 0, 0);
-    }
-
-    if (hThread) {
-        TerminateThread(hThread, 0);
-        CloseHandle(hThread);
-        hThread = 0;
-    }
+    DestroyWindow(VDPRamHWnd);
 }
 
 void update_vdp_ram_debug()
 {
-    if (VDPRamHWnd) {
-        SendMessage(VDPRamHWnd, UpdateMSG, 0, 0);
-    }
+    SendMessage(VDPRamHWnd, UpdateMSG, 0, 0);
 }

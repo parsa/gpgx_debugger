@@ -2,30 +2,19 @@
 // Microsoft Visual C++ generated include file.
 // Used by gui.rc
 //
-#define VS_VERSION_INFO                 1
-#define IDD_PLANEEXPLORER               101
-#define IDI_GENS                        102
-#define IDD_BPTS                        103
-#define IDD_PROMPT                      104
-#define IDD_VDPRAM                      105
-#define IDD_VDP_REGISTERS_MODEREGISTERS 106
-#define IDD_VDP_REGISTERS_OTHERREGISTERS 107
-#define ID_CANCEL                       1000
-#define IDC_BPT_LIST                    1001
-#define IDC_EXEC_BPT                    1059
-#define IDC_68K_RAM_BPT                 1060
-#define IDC_BPT_ADDR                    1061
-#define IDC_BPT_SIZE                    1062
-#define IDC_BPT_IS_READ                 1063
-#define IDC_BPT_IS_WRITE                1064
-#define IDC_ADD_BREAK                   1065
-#define IDC_DEL_BREAK                   1066
-#define IDC_CLEAR_BREAKS                1067
-#define IDC_VDP_BREAK                   1070
-#define IDC_VRAM_BPT                    1073
-#define IDC_CRAM_BPT                    1074
-#define IDC_VSRAM_BPT                   1077
-#define IDC_Z80_RAM_BPT                 1087
+#define IDD_PLANEEXPLORER                101
+#define IDD_VDPRAM                       157
+#define IDD_VDP_REGISTERS_MODEREGISTERS  161
+#define IDD_VDP_REGISTERS_OTHERREGISTERS 162
+
+#define IDC_PLANEEXPLORER_MAIN          54001
+#define IDC_PLANEEXPLORER_TILEINFO      54002
+#define IDC_PLANEEXPLORER_TRANS         54003
+#define IDC_PLANEEXPLORER_PLANE_A       54004
+#define IDC_PLANEEXPLORER_PLANE_B       54005
+#define IDC_PLANEEXPLORER_WINDOW        54006
+#define IDC_PLANEEXPLORER_SPRITES       54007
+
 #define IDC_VDP_REGISTERS_VSI           31032
 #define IDC_VDP_REGISTERS_HSI           31033
 #define IDC_VDP_REGISTERS_LCB           31034
@@ -102,56 +91,33 @@
 #define IDC_VDP_REGISTERS_0E13          32077
 #define IDC_VDP_REGISTERS_SCROLLAPATTERNBASE_E 32078
 #define IDC_VDP_REGISTERS_SCROLLBPATTERNBASE_E 32079
-#define ID_TOOLS_VDPRAM                 40001
-#define ID_TOOLS_PLANEEXPLORER          40002
-#define ID_TOOLS_HEXEDITOR              40003
-#define ID_HELP_ABOUT                   40004
-#define IDC_C_HEX_LINES                 42191
-#define IDC_C_HEX_TEXT                  42192
-#define IDC_C_HEX_GOTO                  42193
-#define IDC_C_HEX_DUMP                  42194
-#define IDC_C_HEX_COPY_NUMS             42195
-#define IDC_C_HEX_COPY_CHARS            42196
-#define IDC_C_HEX_COPY_AUTO             42197
-#define IDC_C_HEX_COPY_ADDRSESS         42198
-#define IDC_C_HEX_PASTE_NUMS            42200
-#define IDC_C_HEX_PASTE_CHARS           42201
-#define IDC_C_HEX_PASTE_AUTO            42202
-#define IDC_C_HEX_REGION                42300
-#define IDC_PROMPT_TEXT                 43000
-#define IDC_PROMPT_TEXT2                43001
-#define IDC_PROMPT_EDIT                 43005
+
 #define IDC_VDP_TILES_SCROLLBAR         50001
 #define IDC_VDP_TILES                   50016
 #define IDC_VDP_PALETTE                 50017
 #define IDC_VDP_TILE_VIEW               50018
+
 #define IDC_VDP_TILE_INFO               50031
 #define IDC_VDP_VIEW_VRAM               50034
 #define IDC_VDP_VIEW_RAM                50035
 #define IDC_VDP_PAL_GROUP               50036
 #define IDC_VDP_VRAM_GROUP              50037
 #define IDC_VDP_VIEW_MODE               50038
+
 #define IDC_VDP_VRAM_DUMP               51000
 #define IDC_VDP_VRAM_LOAD               51001
 #define IDC_VDP_PAL_LOAD                51100
 #define IDC_VDP_PAL_DUMP                51101
 #define IDC_VDP_PAL_YY                  51102
 #define IDC_VDP_PAL_RNB                 51103
-#define IDC_PLANEEXPLORER_MAIN          54001
-#define IDC_PLANEEXPLORER_TILEINFO      54002
-#define IDC_PLANEEXPLORER_TRANS         54003
-#define IDC_PLANEEXPLORER_PLANE_A       54004
-#define IDC_PLANEEXPLORER_PLANE_B       54005
-#define IDC_PLANEEXPLORER_WINDOW        54006
-#define IDC_PLANEEXPLORER_SPRITES       54007
 
 // Next default values for new objects
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        111
-#define _APS_NEXT_COMMAND_VALUE         40005
-#define _APS_NEXT_CONTROL_VALUE         1089
-#define _APS_NEXT_SYMED_VALUE           110
+#define _APS_NEXT_RESOURCE_VALUE        103
+#define _APS_NEXT_COMMAND_VALUE         40001
+#define _APS_NEXT_CONTROL_VALUE         1000
+#define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

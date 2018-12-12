@@ -9,7 +9,6 @@
 #include "vdp_ctrl.h"
 
 HWND PlaneExplorerHWnd = NULL;
-static HANDLE hThread = NULL;
 
 /*********** PLANE EXPLORER ******/
 
@@ -604,14 +603,7 @@ BOOL CALLBACK PlaneExplorerDialogProc(HWND hwnd, UINT Message, WPARAM wParam, LP
     }
     case WM_CLOSE:
         PlaneExplorerHWnd = NULL;
-        PostQuitMessage(0);
-        EndDialog(hwnd, 0);
-
-        if (hThread) {
-            CloseHandle(hThread);
-            hThread = 0;
-        }
-
+        EndDialog(hwnd, 1);
         break;
 
     case WM_MOUSELEAVE:
@@ -671,6 +663,8 @@ BOOL CALLBACK PlaneExplorerDialogProc(HWND hwnd, UINT Message, WPARAM wParam, LP
     case UpdateMSG:
     {
         RedrawWindow(PlaneExplorerHWnd, NULL, NULL, RDW_INVALIDATE);
+        //InvalidateRect(PlaneExplorerHWnd, NULL, FALSE);
+        //UpdateWindow(PlaneExplorerHWnd);
     } break;
 
     default:
@@ -680,54 +674,33 @@ BOOL CALLBACK PlaneExplorerDialogProc(HWND hwnd, UINT Message, WPARAM wParam, LP
     return TRUE;
 }
 
-static DWORD WINAPI ThreadProc(LPVOID lpParam)
+DWORD WINAPI ThreadProc(LPVOID lpParam)
 {
-    MSG msg;
+    MSG messages;
 
-    PlaneExplorerHWnd = CreateDialog(pinst, MAKEINTRESOURCE(IDD_PLANEEXPLORER), rarch, (DLGPROC)PlaneExplorerDialogProc);
-    ShowWindow(PlaneExplorerHWnd, SW_SHOW);
-    UpdateWindow(PlaneExplorerHWnd);
-    SetForegroundWindow(PlaneExplorerHWnd);
+    PlaneExplorerHWnd = CreateDialog(dbg_wnd_hinst, MAKEINTRESOURCE(IDD_PLANEEXPLORER), dbg_window, (DLGPROC)PlaneExplorerDialogProc);
 
-    HANDLE hMutex = CreateMutex(NULL, FALSE, PLANE_EXPLORER_MUTEX);
-
-    while (GetMessage(&msg, NULL, 0, 0))
+    while (GetMessage(&messages, PlaneExplorerHWnd, 0, 0))
     {
-        if (!IsDialogMessage(PlaneExplorerHWnd, &msg))
-        {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
+        TranslateMessage(&messages);
+        DispatchMessage(&messages);
 	}
-
-    CloseHandle(hMutex);
 
     return 1;
 }
 
 void create_plane_explorer()
 {
-    if (PlaneExplorerHWnd == NULL) {
-        hThread = CreateThread(0, 0, ThreadProc, NULL, 0, NULL);
-    }
+    CreateThread(0, NULL, ThreadProc, NULL, NULL, NULL);
 }
 
 void destroy_plane_explorer()
 {
-    if (PlaneExplorerHWnd) {
-        SendMessage(PlaneExplorerHWnd, WM_CLOSE, 0, 0);
-    }
-
-    if (hThread) {
-        TerminateThread(hThread, 0);
-        CloseHandle(hThread);
-        hThread = 0;
-    }
+    DestroyWindow(PlaneExplorerHWnd);
 }
 
 void update_plane_explorer()
 {
-    if (PlaneExplorerHWnd) {
+    if (PlaneExplorerHWnd)
         SendMessage(PlaneExplorerHWnd, UpdateMSG, 0, 0);
-    }
 }
