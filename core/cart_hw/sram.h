@@ -2,7 +2,7 @@
  *  Genesis Plus
  *  Backup RAM support
  *
- *  Copyright (C) 2007-2026  Eke-Eke (Genesis Plus GX)
+ *  Copyright (C) 2007-2016  Eke-Eke (Genesis Plus GX)
  *
  *  Redistribution and use of this code or any derivative works are permitted
  *  provided that the following conditions are met:
@@ -55,15 +55,15 @@ typedef struct
 {
   uint8 detected;
   uint8 on;
-  uint8 type;
+  uint8 custom;
   uint32 start;
   uint32 end;
   uint32 crc;
-  uint8 sram[0x10000];
+  uint8 *sram;
 } T_SRAM;
 
 /* Function prototypes */
-extern void sram_init(void);
+extern void sram_init();
 extern unsigned int sram_read_byte(unsigned int address);
 extern unsigned int sram_read_word(unsigned int address);
 extern void sram_write_byte(unsigned int address, unsigned int data);
