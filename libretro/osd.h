@@ -3,7 +3,7 @@
  *
  *  Genesis Plus GX libretro port
  *
- *  Copyright Eke-Eke (2007-2022)
+ *  Copyright Eke-Eke (2007-2016)
  *
  *  Copyright Daniel De Matteis (2012-2016)
  *
@@ -91,7 +91,7 @@ typedef struct
   uint8 padtype;
 } t_input_config;
 
-typedef struct
+typedef struct 
 {
   char version[16];
   uint8 hq_fm;
@@ -102,14 +102,9 @@ typedef struct
 #ifdef HAVE_YM3438_CORE
   uint8 ym3438;
 #endif
-#ifdef HAVE_OPLL_CORE
-  uint8 opll;
-#endif
   uint8 mono;
   int16 psg_preamp;
   int16 fm_preamp;
-  int16 cdda_volume;
-  int16 pcm_volume;
   uint16 lp_range;
   int16 low_freq;
   int16 high_freq;
@@ -124,13 +119,11 @@ typedef struct
   uint8 addr_error;
   uint8 bios;
   uint8 lock_on;
-  uint8 add_on;
   uint8 overscan;
   uint8 aspect_ratio;
   uint8 ntsc;
   uint8 lcd;
   uint8 gg_extra;
-  uint8 left_border;
   uint8 render;
   t_input_config input[MAX_INPUTS];
   uint8 invert_mouse;
