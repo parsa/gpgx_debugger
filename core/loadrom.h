@@ -40,6 +40,10 @@
 #ifndef _LOADROM_H_
 #define _LOADROM_H_
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifndef MAXROMSIZE
 #define MAXROMSIZE 10485760
 #endif
@@ -73,6 +77,10 @@ extern void get_region(char *romheader);
 extern char *get_company(void);
 extern char *get_peripheral(int index);
 extern void getrominfo(char *romheader);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _LOADROM_H_ */
 

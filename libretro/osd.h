@@ -42,6 +42,10 @@
 #ifndef _OSD_H
 #define _OSD_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifdef _MSC_VER
 #include <stdio.h>
 #define strncasecmp _strnicmp
@@ -141,9 +145,11 @@ typedef struct
   int32 md_ch_volumes[6];
   signed int sms_fm_ch_volumes[9];
 #endif
-} t_config;
+} config_t;
 
-extern t_config config;
+typedef config_t t_config;
+
+extern config_t config;
 
 extern char GG_ROM[256];
 extern char AR_ROM[256];
@@ -170,6 +176,10 @@ extern void ROMCheatUpdate(void);
 #define cdStreamSeek        rfseek
 #define cdStreamTell        rftell
 #define cdStreamGets        rfgets
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif /* _OSD_H */

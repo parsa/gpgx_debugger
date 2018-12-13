@@ -40,6 +40,10 @@
 #ifndef _MEMBNK_H_
 #define _MEMBNK_H_
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 extern unsigned int zbank_unused_r(unsigned int address);
 extern void zbank_unused_w(unsigned int address, unsigned int data);
 extern unsigned int zbank_lockup_r(unsigned int address);
@@ -56,5 +60,9 @@ typedef struct
 } t_zbank_memory_map;
 
 extern t_zbank_memory_map zbank_memory_map[256];
+typedef t_zbank_memory_map _zbank_memory_map;
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _MEMBNK_H_ */
