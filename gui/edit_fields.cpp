@@ -35,16 +35,6 @@ unsigned int GetDlgItemHex(HWND hwnd, int controlID)
     return value;
 }
 
-std::string make_hex_string(unsigned int width, unsigned int data)
-{
-    std::string result;
-    std::stringstream text;
-    text << std::setw(width) << std::setfill('0') << std::hex << std::uppercase;
-
-    text << (unsigned int)((uint64_t)data & (uint64_t)((uint64_t)(1ULL << (uint64_t)((uint64_t)width * 4ULL)) - 1ULL));
-    return text.str();
-}
-
 void UpdateDlgItemHex(HWND hwnd, int controlID, unsigned int width, unsigned int data)
 {
     const unsigned int maxTextLength = 1024;
@@ -54,11 +44,12 @@ void UpdateDlgItemHex(HWND hwnd, int controlID, unsigned int width, unsigned int
         currentTextTemp[0] = '\0';
     }
     std::string currentText = currentTextTemp;
-    std::string result = make_hex_string(width, data);
-
-    if (result != currentText)
+    std::stringstream text;
+    text << std::setw(width) << std::setfill('0') << std::hex << std::uppercase;
+    text << data;
+    if (text.str() != currentText)
     {
-        SetDlgItemText(hwnd, controlID, result.c_str());
+        SetDlgItemText(hwnd, controlID, text.str().c_str());
     }
 }
 
