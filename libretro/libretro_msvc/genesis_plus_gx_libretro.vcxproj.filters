@@ -432,6 +432,9 @@
     <ClCompile Include="..\..\gui\edit_fields.cpp">
       <Filter>gui\edit_fields</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\core\debug\debug_wrap.c">
+      <Filter>core\debug</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\core\genesis.h">
@@ -805,6 +808,9 @@
     </ClInclude>
     <ClInclude Include="..\..\gui\edit_fields.h">
       <Filter>gui\edit_fields</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\core\debug\debug_wrap.h">
+      <Filter>core\debug</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
