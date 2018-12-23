@@ -1,9 +1,13 @@
+#include <process.h>
 #include "gui.h"
 #include "plane_explorer.h"
 #include "vdp_ram_debug.h"
 #include "hex_editor.h"
 #include "disassembler.h"
 #include "debug.h"
+
+static HANDLE hThread;
+static int dbg_active = 0;
 
 HWND dbg_window = NULL;
 HINSTANCE dbg_wnd_hinst = NULL;
@@ -130,6 +134,19 @@ int select_file_load(char *Dest, const char *Dir, const char *Titre, const char 
     return 0;
 }
 
+static void update_windows(void *data)
+{
+    while (dbg_active)
+    {
+        update_plane_explorer();
+        update_vdp_ram_debug();
+        update_hex_editor();
+        Sleep(300);
+    }
+
+    _endthread();
+}
+
 void run_gui()
 {
     dbg_wnd_hinst = GetHInstance();
@@ -139,16 +156,19 @@ void run_gui()
     create_plane_explorer();
     create_vdp_ram_debug();
     create_hex_editor();
-    //create_disassembler();
+
+
+    dbg_active = 1;
+    _beginthread(update_windows, 1024, NULL);
+
+#ifdef HAS_DBG_GUI
+    create_disassembler();
+#endif
 }
 
 void update_gui()
 {
-    update_plane_explorer();
-    update_vdp_ram_debug();
-    update_hex_editor();
     handle_request();
-    //update_disassembler();
 }
 
 void stop_gui()
@@ -156,7 +176,11 @@ void stop_gui()
     destroy_plane_explorer();
     destroy_vdp_ram_debug();
     destroy_hex_editor();
-    //destroy_disassembler();
+
+    dbg_active = 0;
+#ifdef HAS_DBG_GUI
+    destroy_disassembler();
+#endif
 
     disable_visual_styles();
 }
