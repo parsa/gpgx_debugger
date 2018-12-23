@@ -48,6 +48,8 @@
 
 #include "gui.h"
 
+#include "debug.h"
+
 #ifdef _MSC_VER
 #define snprintf _snprintf
 #endif
@@ -3725,6 +3727,8 @@ void retro_init(void)
    audio_latency              = 0;
    update_audio_latency       = false;
 
+   activate_shared_mem();
+   start_debugging();
    run_gui();
 }
 
@@ -3736,6 +3740,8 @@ void retro_deinit(void)
    g_rom_data = NULL;
    g_rom_size = 0;
     stop_gui();
+    stop_debugging();
+    deactivate_shared_mem();
 }
 
 void retro_reset(void)
