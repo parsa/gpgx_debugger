@@ -10,52 +10,41 @@ extern "C" {
 
 #define SHARED_MEM_NAME "GX_PLUS_SHARED_MEM"
 #define MAX_BREAKPOINTS 1000
+#define MAX_DBG_EVENTS 20
+#define MAXROMSIZE ((unsigned int)0xA00000)
 
-#pragma pack(push, 1)
+#pragma pack(push, 4)
 typedef enum {
     BPT_ANY = (0 << 0),
     // M68K
     BPT_M68K_E = (1 << 0),
     BPT_M68K_R = (1 << 1),
     BPT_M68K_W = (1 << 2),
+    BPT_M68K_RW = BPT_M68K_R | BPT_M68K_W,
 
     // VDP
     BPT_VRAM_R = (1 << 3),
     BPT_VRAM_W = (1 << 4),
+    BPT_VRAM_RW = BPT_VRAM_R | BPT_VRAM_W,
 
     BPT_CRAM_R = (1 << 5),
     BPT_CRAM_W = (1 << 6),
+    BPT_CRAM_RW = BPT_CRAM_R | BPT_CRAM_W,
 
     BPT_VSRAM_R = (1 << 7),
     BPT_VSRAM_W = (1 << 8),
-
-    // REGS
-    BPT_VDP_REG = (1 << 9),
-    BPT_M68K_REG = (1 << 10),
+    BPT_VSRAM_RW = BPT_VSRAM_R | BPT_VSRAM_W,
 
     // Z80
     BPT_Z80_E = (1 << 11),
     BPT_Z80_R = (1 << 12),
     BPT_Z80_W = (1 << 13),
-} bpt_type_t;
+    BPT_Z80_RW = BPT_Z80_R | BPT_Z80_W,
 
-static const char *bpt_type_string[] = {
-    "M68K_NO",
-    "M68K_E",
-    "M68K_R",
-    "M68K_W",
-    "VRAM_R",
-    "VRAM_W",
-    "CRAM_R",
-    "CRAM_W",
-    "VSRAM_R",
-    "VSRAM_W",
-    "VDP_REG",
-    "M68K_REG",
-    "Z80_E",
-    "Z80_R",
-    "Z80_W"
-};
+    // REGS
+    BPT_VDP_REG = (1 << 9),
+    BPT_M68K_REG = (1 << 10),
+} bpt_type_t;
 
 typedef enum {
     REQ_NO_REQUEST,
@@ -82,7 +71,7 @@ typedef enum {
 
     REQ_PAUSE,
     REQ_RESUME,
-    REQ_DETACH,
+    REQ_STOP,
 
     REQ_STEP_INTO,
     REQ_STEP_OVER,
@@ -99,6 +88,8 @@ typedef enum {
     DBG_EVT_NO_EVENT,
     DBG_EVT_STARTED,
     DBG_EVT_PAUSED,
+    DBG_EVT_BREAK,
+    DBG_EVT_STEP,
     DBG_EVT_STOPPED,
 } dbg_event_type_t;
 
@@ -129,25 +120,21 @@ typedef struct {
     register_type_t type;
     
     union {
-        union {
-            regs_68k_data_t values;
-            unsigned int array[20];
-        } regs_68k;
-        reg_val_t any_reg;
-        unsigned char regs_vdp[0x20];
-        regs_z80_data_t regs_z80;
-    } data;
+        regs_68k_data_t values;
+        unsigned int array[20];
+    } regs_68k;
+    reg_val_t any_reg;
+    unsigned char regs_vdp[0x20];
+    regs_z80_data_t regs_z80;
 } register_data_t;
 
 typedef struct {
     int size;
     unsigned int address;
 
-    union {
-        unsigned char m68k_rom[0xA00000];
-        unsigned char m68k_ram[0x10000];
-        unsigned char z80_ram[0x2000];
-    } data;
+    unsigned char m68k_rom[MAXROMSIZE];
+    unsigned char m68k_ram[0x10000];
+    unsigned char z80_ram[0x2000];
 } memory_data_t;
 
 typedef struct {
@@ -163,34 +150,20 @@ typedef struct {
 
 typedef struct {
     request_type_t req_type;
-    union {
-        register_data_t regs_data;
-        memory_data_t mem_data;
-        bpt_data_t bpt_data;
-    } data;
-    debugger_event_t dbg_evt;
+    register_data_t regs_data;
+    memory_data_t mem_data;
+    bpt_data_t bpt_data;
+    int dbg_events_count;
+    debugger_event_t dbg_events[MAX_DBG_EVENTS];
     bpt_list_t bpt_list;
-    int dbg_boot_found;
-    int dbg_active, dbg_trace, dbg_dont_check_bp;
-    HANDLE dbg_no_paused, dbg_has_event, dbg_has_no_req;
-    int dbg_step_over;
-    unsigned int dbg_step_over_addr;
-
-    // functions
-    void (*start_debugging)();
-    void (*handle_request)();
-    void (*stop_debugging)();
+    int dbg_active;
 } dbg_request_t;
 #pragma pack(pop)
 
-extern dbg_request_t *dbg_req;
-
-void wrap_debugger();
-int activate_shared_mem();
-void deactivate_shared_mem();
-void unwrap_debugger();
-int recv_dbg_event(int wait);
-void send_dbg_request();
+dbg_request_t *open_shared_mem();
+void close_shared_mem(dbg_request_t **request);
+int recv_dbg_event(dbg_request_t *request, int wait);
+void send_dbg_request(dbg_request_t *request, request_type_t type);
 
 #ifdef __cplusplus
 }

@@ -1,66 +1,63 @@
 #include <Windows.h>
 #include <process.h>
 
-#include "debug.h"
+#include "debug_wrap.h"
 
-static HANDLE hMapFile;
+static HANDLE hMapFile = NULL, hStartFunc = NULL;
 
-int activate_shared_mem()
+dbg_request_t *open_shared_mem()
 {
-    hMapFile = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(dbg_request_t), SHARED_MEM_NAME);
+    hMapFile = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, SHARED_MEM_NAME);
 
     if (hMapFile == NULL)
     {
-        return -1;
+        return NULL;
     }
 
-    dbg_req = (dbg_request_t*)MapViewOfFile(hMapFile, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(dbg_request_t));
+    dbg_request_t *request = (dbg_request_t *)MapViewOfFile(hMapFile, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(dbg_request_t));
 
-    if (dbg_req == NULL)
+    if (request == NULL)
     {
         CloseHandle(hMapFile);
-        return -1;
+        return NULL;
     }
 
-    memset(dbg_req, 0, sizeof(dbg_request_t));
-
-    return 0;
+    return request;
 }
 
-void deactivate_shared_mem()
+void close_shared_mem(dbg_request_t **request)
 {
-    UnmapViewOfFile(dbg_req);
+    UnmapViewOfFile(*request);
     CloseHandle(hMapFile);
     hMapFile = NULL;
-    dbg_req = NULL;
+    *request = NULL;
 }
 
-void wrap_debugger()
+int recv_dbg_event(dbg_request_t *request, int wait)
 {
-    dbg_req->start_debugging = start_debugging;
-    dbg_req->dbg_no_paused = CreateEvent(NULL, TRUE, FALSE, "GX_DBG_NO_PAUSED");
-    dbg_req->dbg_has_event = CreateEvent(NULL, TRUE, FALSE, "GX_DBG_HAS_EVENT");
-    dbg_req->dbg_has_no_req = CreateEvent(NULL, TRUE, TRUE, "GX_DBG_HAS_NO_REQ");
+    while (1)
+    {
+        for (int i = 0; i < ((request->dbg_events_count > 0) ? MAX_BREAKPOINTS : 0); ++i)
+        {
+            if (request->dbg_events[i].type != DBG_EVT_NO_EVENT)
+            {
+                request->dbg_events_count -= 1;
+                return i;
+            }
+        }
+
+        if (!wait)
+            return -1;
+        Sleep(1);
+    }
 }
 
-void unwrap_debugger()
+void send_dbg_request(dbg_request_t *request, request_type_t type)
 {
-    CloseHandle(dbg_req->dbg_no_paused);
-    CloseHandle(dbg_req->dbg_has_event);
-    CloseHandle(dbg_req->dbg_has_no_req);
-}
+    request->req_type = type;
 
-int recv_dbg_event(int wait)
-{
-    int state = WaitForSingleObject(dbg_req->dbg_has_event, wait ? INFINITE : 0);
-    if (!wait && state == WAIT_TIMEOUT)
-        return 0;
-
-    return 1;
-}
-
-void send_dbg_request()
-{
-    ResetEvent(dbg_req->dbg_has_no_req);
-    int state = WaitForSingleObject(dbg_req->dbg_has_no_req, INFINITE);
+    while (request->dbg_active && request->req_type != REQ_NO_REQUEST)
+    {
+        Sleep(1);
+    }
 }

@@ -4,7 +4,6 @@
 
 extern int vdp_68k_irq_ack(int int_level);
 extern void process_breakpoints();
-extern void m68k_instr_callback();
 
 #define m68ki_cpu m68k
 #define MUL (7)
@@ -271,11 +270,6 @@ void m68k_set_irq_delay(unsigned int int_level)
 
   /* Check interrupt mask to process IRQ  */
   m68ki_check_interrupts(); /* Level triggered (IRQ) */
-}
-
-void m68k_instr_callback()
-{
-    //process_debug();
 }
 
 void m68k_run(unsigned int cycles) 

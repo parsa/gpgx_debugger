@@ -25,13 +25,11 @@ namespace cap
 #include "capstone/capstone.h"
 }
 
-#define MAXROMSIZE ((unsigned int)0xA00000)
 #define DBG_EVENTS_TIMER 1
-#define UPDATE_DISASM_TIMER 2
 #define BYTES_BEFORE_PC 0x30
 #define LINES_BEFORE_PC 15
 #define LINES_MAX 25
-#define DISASM_LISTING_BYTES 0x100
+#define DISASM_LISTING_BYTES 0x200
 #define ROM_CODE_START_ADDR ((unsigned int)0x200)
 #define RAM_START_ADDR ((unsigned int)0xFFFF0000)
 #define DISASM_LISTING_BKGN (RGB(0xCC, 0xFF, 0xFF))
@@ -39,6 +37,7 @@ namespace cap
 #define BPT_COLOR (RGB(0xFF, 0, 0))
 #define BPT_COLOR_PC (RGB(0xA0, 0xA0, 0xFF))
 
+static dbg_request_t *dbg_req = NULL;
 static HANDLE hThread = NULL;
 
 static HWND disHwnd = NULL, listHwnd = NULL;
@@ -67,6 +66,8 @@ static std::vector<extra_selection_t> extraSelections;
 
 static void init_highlighter()
 {
+    highlightingRules.clear();
+
     highlight_rule_t rule;
 
     keywordFormat.cbSize = sizeof(CHARFORMAT2);
@@ -74,168 +75,11 @@ static void init_highlighter()
     keywordFormat.dwMask = CFM_BOLD | CFM_COLOR;
     keywordFormat.dwEffects = CFE_BOLD;
 
-    std::list<std::string> keywordPatterns;
-    keywordPatterns.push_back("\\babcd\\b");
-    keywordPatterns.push_back("\\badd\\b");
-    keywordPatterns.push_back("\\badda\\b");
-    keywordPatterns.push_back("\\baddi\\b");
-    keywordPatterns.push_back("\\baddq\\b");
-    keywordPatterns.push_back("\\baddx\\b");
-    keywordPatterns.push_back("\\band\\b");
-    keywordPatterns.push_back("\\bandi\\b");
-    keywordPatterns.push_back("\\basl\\b");
-    keywordPatterns.push_back("\\basr\\b");
-    keywordPatterns.push_back("\\bbchg\\b");
-    keywordPatterns.push_back("\\bbclr\\b");
-    keywordPatterns.push_back("\\bbset\\b");
-    keywordPatterns.push_back("\\bbtst\\b");
-    keywordPatterns.push_back("\\bchk\\b");
-    keywordPatterns.push_back("\\bclr\\b");
-    keywordPatterns.push_back("\\bcmp\\b");
-    keywordPatterns.push_back("\\bcmpa\\b");
-    keywordPatterns.push_back("\\bcmpi\\b");
-    keywordPatterns.push_back("\\bcmpm\\b");
-    keywordPatterns.push_back("\\bdivs\\b");
-    keywordPatterns.push_back("\\bdivu\\b");
-    keywordPatterns.push_back("\\beor\\b");
-    keywordPatterns.push_back("\\beori\\b");
-    keywordPatterns.push_back("\\bexg\\b");
-    keywordPatterns.push_back("\\bext\\b");
-    keywordPatterns.push_back("\\bextb\\b");
-    keywordPatterns.push_back("\\billegal\\b");
-    keywordPatterns.push_back("\\blea\\b");
-    keywordPatterns.push_back("\\blink\\b");
-    keywordPatterns.push_back("\\blsl\\b");
-    keywordPatterns.push_back("\\blsr\\b");
-    keywordPatterns.push_back("\\bmove\\b");
-    keywordPatterns.push_back("\\bmovea\\b");
-    keywordPatterns.push_back("\\bmovem\\b");
-    keywordPatterns.push_back("\\bmovep\\b");
-    keywordPatterns.push_back("\\bmoveq\\b");
-    keywordPatterns.push_back("\\bmuls\\b");
-    keywordPatterns.push_back("\\bmulu\\b");
-    keywordPatterns.push_back("\\bnbcd\\b");
-    keywordPatterns.push_back("\\bneg\\b");
-    keywordPatterns.push_back("\\bnegx\\b");
-    keywordPatterns.push_back("\\bnop\\b");
-    keywordPatterns.push_back("\\bnot\\b");
-    keywordPatterns.push_back("\\bor\\b");
-    keywordPatterns.push_back("\\bori\\b");
-    keywordPatterns.push_back("\\breset\\b");
-    keywordPatterns.push_back("\\brol\\b");
-    keywordPatterns.push_back("\\bror\\b");
-    keywordPatterns.push_back("\\broxl\\b");
-    keywordPatterns.push_back("\\broxr\\b");
-    keywordPatterns.push_back("\\brte\\b");
-    keywordPatterns.push_back("\\brtr\\b");
-    keywordPatterns.push_back("\\brts\\b");
-    keywordPatterns.push_back("\\bsbcd\\b");
-    keywordPatterns.push_back("\\bscc\\b");
-    keywordPatterns.push_back("\\bsge\\b");
-    keywordPatterns.push_back("\\bsls\\b");
-    keywordPatterns.push_back("\\bspl\\b");
-    keywordPatterns.push_back("\\bscs\\b");
-    keywordPatterns.push_back("\\bsgt\\b");
-    keywordPatterns.push_back("\\bslt\\b");
-    keywordPatterns.push_back("\\bst\\b");
-    keywordPatterns.push_back("\\bseq\\b");
-    keywordPatterns.push_back("\\bshi\\b");
-    keywordPatterns.push_back("\\bsmi\\b");
-    keywordPatterns.push_back("\\bsvc\\b");
-    keywordPatterns.push_back("\\bsf\\b");
-    keywordPatterns.push_back("\\bsle\\b");
-    keywordPatterns.push_back("\\bsne\\b");
-    keywordPatterns.push_back("\\bsvs\\b");
-    keywordPatterns.push_back("\\bstop\\b");
-    keywordPatterns.push_back("\\bsub\\b");
-    keywordPatterns.push_back("\\bsuba\\b");
-    keywordPatterns.push_back("\\bsubi\\b");
-    keywordPatterns.push_back("\\bsubq\\b");
-    keywordPatterns.push_back("\\bsubx\\b");
-    keywordPatterns.push_back("\\bswap\\b");
-    keywordPatterns.push_back("\\btas\\b");
-    keywordPatterns.push_back("\\btrap\\b");
-    keywordPatterns.push_back("\\btrapv\\b");
-    keywordPatterns.push_back("\\btst\\b");
-    keywordPatterns.push_back("\\bunlk\\b");
-    keywordPatterns.push_back("\\bb\\b");
-    keywordPatterns.push_back("\\bw\\b");
-    keywordPatterns.push_back("\\bl\\b");
-    keywordPatterns.push_back("\\bs\\b");
-
-    keywordPatterns.push_back("\\bd0\\b");
-    keywordPatterns.push_back("\\bd1\\b");
-    keywordPatterns.push_back("\\bd2\\b");
-    keywordPatterns.push_back("\\bd3\\b");
-    keywordPatterns.push_back("\\bd4\\b");
-    keywordPatterns.push_back("\\bd5\\b");
-    keywordPatterns.push_back("\\bd6\\b");
-    keywordPatterns.push_back("\\bd7\\b");
-    keywordPatterns.push_back("\\ba0\\b");
-    keywordPatterns.push_back("\\ba1\\b");
-    keywordPatterns.push_back("\\ba2\\b");
-    keywordPatterns.push_back("\\ba3\\b");
-    keywordPatterns.push_back("\\ba4\\b");
-    keywordPatterns.push_back("\\ba5\\b");
-    keywordPatterns.push_back("\\ba6\\b");
-    keywordPatterns.push_back("\\ba7\\b");
-    keywordPatterns.push_back("\\bpc\\b");
-    keywordPatterns.push_back("\\bsr\\b");
-    keywordPatterns.push_back("\\bccr\\b");
-    keywordPatterns.push_back("\\bsp\\b");
-    keywordPatterns.push_back("\\busp\\b");
-    keywordPatterns.push_back("\\bssp\\b");
-    keywordPatterns.push_back("\\bisp\\b");
-    keywordPatterns.push_back("\\bbcc\\b");
-    keywordPatterns.push_back("\\bbhs\\b");
-    keywordPatterns.push_back("\\bbge\\b");
-    keywordPatterns.push_back("\\bbls\\b");
-    keywordPatterns.push_back("\\bbpl\\b");
-    keywordPatterns.push_back("\\bbcs\\b");
-    keywordPatterns.push_back("\\bblo\\b");
-    keywordPatterns.push_back("\\bbgt\\b");
-    keywordPatterns.push_back("\\bblt\\b");
-    keywordPatterns.push_back("\\bbeq\\b");
-    keywordPatterns.push_back("\\bbhi\\b");
-    keywordPatterns.push_back("\\bbmi\\b");
-    keywordPatterns.push_back("\\bbvc\\b");
-    keywordPatterns.push_back("\\bble\\b");
-    keywordPatterns.push_back("\\bbne\\b");
-    keywordPatterns.push_back("\\bbvs\\b");
-    keywordPatterns.push_back("\\bbra\\b");
-    keywordPatterns.push_back("\\bbsr\\b");
-    keywordPatterns.push_back("\\bdbra\\b");
-    keywordPatterns.push_back("\\bdbcc\\b");
-    keywordPatterns.push_back("\\bdbge\\b");
-    keywordPatterns.push_back("\\bdbls\\b");
-    keywordPatterns.push_back("\\bdbpl\\b");
-    keywordPatterns.push_back("\\bdbcs\\b");
-    keywordPatterns.push_back("\\bdbgt\\b");
-    keywordPatterns.push_back("\\bdblt\\b");
-    keywordPatterns.push_back("\\bdbt\\b");
-    keywordPatterns.push_back("\\bdbeq\\b");
-    keywordPatterns.push_back("\\bdbhi\\b");
-    keywordPatterns.push_back("\\bdbmi\\b");
-    keywordPatterns.push_back("\\bdbvc\\b");
-    keywordPatterns.push_back("\\bdbf\\b");
-    keywordPatterns.push_back("\\bdble\\b");
-    keywordPatterns.push_back("\\bdbne\\b");
-    keywordPatterns.push_back("\\bdbvs\\b");
-    keywordPatterns.push_back("\\bjmp\\b");
-    keywordPatterns.push_back("\\bjsr\\b");
-
-    for (std::string &pattern : keywordPatterns)
-    {
-        rule.pattern = std::regex(pattern);
-        rule.format = keywordFormat;
-        highlightingRules.push_back(rule);
-    }
-
     addressFormat.cbSize = sizeof(CHARFORMAT2);
     addressFormat.crTextColor = RGB(0x8B, 0, 0x8B); // darkMagenta
     addressFormat.dwMask = CFM_BOLD | CFM_COLOR;
     addressFormat.dwEffects = CFE_BOLD;
-    rule.pattern = std::regex("\\$\\b[A-Fa-f0-9]{1,8}\\b");
+    rule.pattern = std::regex("\\$\\b[A-Fa-f0-9]{1,8}\\b", std::regex::optimize | std::regex::nosubs);
     rule.format = addressFormat;
     highlightingRules.push_back(rule);
 
@@ -243,7 +87,7 @@ static void init_highlighter()
     hexValueFormat.crTextColor = RGB(0, 0x64, 0); // darkGreen
     hexValueFormat.dwMask = CFM_BOLD | CFM_COLOR;
     hexValueFormat.dwEffects = CFE_BOLD;
-    rule.pattern = std::regex("\\#\\$\\b[A-Fa-f0-9]{1,8}\\b");
+    rule.pattern = std::regex("\\#\\$\\b[A-Fa-f0-9]{1,8}\\b", std::regex::optimize | std::regex::nosubs);
     rule.format = hexValueFormat;
     highlightingRules.push_back(rule);
 
@@ -251,7 +95,7 @@ static void init_highlighter()
     lineAddrFormat.crTextColor = RGB(0, 0, 0); // black
     lineAddrFormat.dwMask = CFM_BOLD | CFM_COLOR;
     lineAddrFormat.dwEffects = CFE_BOLD;
-    rule.pattern = std::regex("^\\b[A-Fa-f0-9]{6,8}\\b");
+    rule.pattern = std::regex("^\\b[A-Fa-f0-9]{6,8}\\b", std::regex::optimize | std::regex::nosubs);
     rule.format = lineAddrFormat;
     highlightingRules.push_back(rule);
 }
@@ -284,14 +128,18 @@ static void highligh_blocks()
 {
     LockWindowUpdate(listHwnd);
     SendMessage(listHwnd, EM_HIDESELECTION, 1, 0);
+
+    const char *text = cliptext.c_str();
+    const char *text_end = text + cliptext.length();
     for (const highlight_rule_t &rule : highlightingRules)
     {
-        for (std::sregex_iterator i = std::sregex_iterator(cliptext.cbegin(), cliptext.cend(), rule.pattern); i != std::sregex_iterator(); ++i)
+        for (std::cregex_iterator i = std::cregex_iterator(text, text_end, rule.pattern); i != std::cregex_iterator(); ++i)
         {
-            std::smatch m = *i;
+            std::cmatch m = *i;
             set_selection_format((int)m.position(0), (int)m.length(0), &rule.format);
         }
     }
+    
     SendMessage(listHwnd, EM_HIDESELECTION, 0, 0);
     LockWindowUpdate(NULL);
 }
@@ -536,20 +384,18 @@ static unsigned short update_sr_reg()
 
 static void set_m68k_reg(int reg_index, unsigned int value)
 {
-    dbg_req->data.regs_data.type = REG_TYPE_M68K;
-    dbg_req->data.regs_data.data.any_reg.index = reg_index;
-    dbg_req->data.regs_data.data.any_reg.val = value;
-    dbg_req->req_type = REQ_SET_REG;
-    send_dbg_request();
+    dbg_req->regs_data.type = REG_TYPE_M68K;
+    dbg_req->regs_data.any_reg.index = reg_index;
+    dbg_req->regs_data.any_reg.val = value;
+    send_dbg_request(dbg_req, REQ_SET_REG);
 }
 
 static void update_regs()
 {
-    dbg_req->data.regs_data.type = REG_TYPE_M68K;
-    dbg_req->req_type = REQ_GET_REGS;
-    send_dbg_request();
+    dbg_req->regs_data.type = REG_TYPE_M68K;
+    send_dbg_request(dbg_req, REQ_GET_REGS);
 
-    regs_68k_data_t *reg_vals = &dbg_req->data.regs_data.data.regs_68k.values;
+    regs_68k_data_t *reg_vals = &dbg_req->regs_data.regs_68k.values;
 
     last_pc = reg_vals->pc;
 
@@ -616,7 +462,8 @@ static void set_listing_font(const char *strFont, int nSize)
     memset(&cfFormat, 0, sizeof(cfFormat));
     cfFormat.cbSize = sizeof(cfFormat);
     cfFormat.crTextColor = RGB(0, 0, 0x8B);
-    cfFormat.dwMask = CFM_CHARSET | CFM_FACE | CFM_SIZE | CFM_COLOR;
+    cfFormat.dwMask = CFM_CHARSET | CFM_FACE | CFM_SIZE | CFM_COLOR | CFM_BOLD;
+    cfFormat.dwEffects = CFE_BOLD;
     cfFormat.bCharSet = ANSI_CHARSET;
     cfFormat.bPitchAndFamily = FIXED_PITCH | FF_DONTCARE;
     cfFormat.yHeight = (nSize * 1440) / 72;
@@ -746,9 +593,11 @@ static void update_disasm_with_bpt_list(unsigned int pc)
     for (int i = 0; i < dbg_req->bpt_list.count; ++i)
     {
         bpt_data_t *bpt_data = &dbg_req->bpt_list.breaks[i];
-        addExtraSelection(bpt_data->address, BPT_COLOR);
 
-        if (bpt_data->address == pc)
+        if (bpt_data->type == BPT_M68K_E)
+            addExtraSelection(bpt_data->address, BPT_COLOR);
+
+        if (bpt_data->type == BPT_M68K_E && bpt_data->address == pc)
             changeExtraSelection(pc, BPT_COLOR_PC);
     }
 
@@ -770,8 +619,16 @@ static void get_disasm_listing_pc(unsigned int pc, const unsigned char *code, si
 
     bool ep_fixed = false;
 
-    while (lines < max_lines && code_size && cs_disasm_iter(cs_handle, &code_ptr, &code_size, &address, insn))
+    while (lines < max_lines && code_size)
     {
+        while (!cs_disasm_iter(cs_handle, &code_ptr, &code_size, &address, insn))
+        {
+            code_ptr += 2;
+            address += 2;
+            code_size -= 2;
+        }
+
+
         if (!ep_fixed && insn->address >= pc)
         {
             pc_line = lines;
@@ -829,32 +686,33 @@ static void update_disasm_listing(unsigned int pc)
     unsigned int real_pc = pc;
 
     pc = max(pc - BYTES_BEFORE_PC, (pc < MAXROMSIZE) ? ROM_CODE_START_ADDR : RAM_START_ADDR);
-    dbg_req->data.mem_data.address = pc;
-    dbg_req->data.mem_data.size = DISASM_LISTING_BYTES;
-    dbg_req->req_type = (pc < MAXROMSIZE) ? REQ_READ_68K_ROM : REQ_READ_68K_RAM;
-    send_dbg_request();
+    dbg_req->mem_data.address = pc;
+    dbg_req->mem_data.size = DISASM_LISTING_BYTES;
+    send_dbg_request(dbg_req, (pc < MAXROMSIZE) ? REQ_READ_68K_ROM : REQ_READ_68K_RAM);
 
     get_disasm_listing_pc(
         real_pc,
-        (pc < MAXROMSIZE) ? &dbg_req->data.mem_data.data.m68k_rom[pc] : &dbg_req->data.mem_data.data.m68k_ram[pc - RAM_START_ADDR],
-        dbg_req->data.mem_data.size,
+        (pc < MAXROMSIZE) ? &dbg_req->mem_data.m68k_rom[pc] : &dbg_req->mem_data.m68k_ram[pc - RAM_START_ADDR],
+        dbg_req->mem_data.size,
         LINES_MAX);
 }
 
 static void update_bpt_list()
 {
-    dbg_req->req_type = REQ_LIST_BREAKS;
-    send_dbg_request();
+    send_dbg_request(dbg_req, REQ_LIST_BREAKS);
 
     ListView_SetItemCount(GetDlgItem(disHwnd, IDC_BPT_LIST), dbg_req->bpt_list.count);
 }
 
-static void update_dbg_window_info()
+static void update_dbg_window_info(bool update_registers, bool update_bpts, bool update_listing)
 {
     LockWindowUpdate(disHwnd);
-    update_regs();
-    update_bpt_list();
-    update_disasm_listing(last_pc);
+    if (update_registers)
+        update_regs();
+    if (update_bpts)
+        update_bpt_list();
+    if (update_listing)
+        update_disasm_listing(last_pc);
     LockWindowUpdate(NULL);
 }
 
@@ -865,7 +723,7 @@ static void do_game_started(unsigned int pc)
 static void do_game_paused(unsigned int pc)
 {
     paused = true;
-    update_dbg_window_info();
+    update_dbg_window_info(true, false, true);
 
     SetForegroundWindow(disHwnd);
 }
@@ -879,10 +737,11 @@ static void check_debugger_events()
     if (!dbg_req->dbg_active)
         return;
 
-    if (!recv_dbg_event(0))
+    int event_index = recv_dbg_event(dbg_req, 0);
+    if (event_index == -1)
         return;
 
-    debugger_event_t *dbg_event = &dbg_req->dbg_evt;
+    debugger_event_t *dbg_event = &dbg_req->dbg_events[event_index];
 
     switch (dbg_event->type)
     {
@@ -893,7 +752,7 @@ static void check_debugger_events()
         break;
     }
 
-    ResetEvent(dbg_req->dbg_has_event);
+    dbg_event->type = DBG_EVT_NO_EVENT;
 }
 
 LRESULT CALLBACK DisasseblerWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -936,18 +795,12 @@ LRESULT CALLBACK DisasseblerWndProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
         SendMessage(GetDlgItem(hWnd, IDC_SR_I_SPIN), UDM_SETRANGE, 0, MAKELPARAM(100,0));
 
         SetTimer(hWnd, DBG_EVENTS_TIMER, 10, NULL);
-        SetTimer(hWnd, UPDATE_DISASM_TIMER, 2000, NULL);
     } break;
     case WM_TIMER:
     {
         switch (LOWORD(wParam))
         {
         case DBG_EVENTS_TIMER: check_debugger_events(); break;
-        case UPDATE_DISASM_TIMER:
-        {
-            if (!paused)
-                update_dbg_window_info();
-        } break;
         }
         return FALSE;
     } break;
@@ -981,7 +834,37 @@ LRESULT CALLBACK DisasseblerWndProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
             } break;
             case 2: // Type
             {
-                snprintf(tmp, sizeof(tmp), "%s", bpt_type_string[bpt_data->type]);
+                switch (bpt_data->type)
+                {
+                case BPT_M68K_E: snprintf(tmp, sizeof(tmp), "%s", "M68K_E"); break;
+                case BPT_Z80_E: snprintf(tmp, sizeof(tmp), "%s", "Z80_E"); break;
+                case BPT_M68K_R: snprintf(tmp, sizeof(tmp), "%s", "M68K_R"); break;
+                case BPT_M68K_W: snprintf(tmp, sizeof(tmp), "%s", "M68K_W"); break;
+                case BPT_M68K_RW: snprintf(tmp, sizeof(tmp), "%s", "M68K_RW"); break;
+
+                // VDP
+                case BPT_VRAM_R: snprintf(tmp, sizeof(tmp), "%s", "VRAM_R"); break;
+                case BPT_VRAM_W: snprintf(tmp, sizeof(tmp), "%s", "VRAM_W"); break;
+                case BPT_VRAM_RW: snprintf(tmp, sizeof(tmp), "%s", "VRAM_RW"); break;
+
+                case BPT_CRAM_R: snprintf(tmp, sizeof(tmp), "%s", "CRAM_R"); break;
+                case BPT_CRAM_W: snprintf(tmp, sizeof(tmp), "%s", "CRAM_W"); break;
+                case BPT_CRAM_RW: snprintf(tmp, sizeof(tmp), "%s", "CRAM_RW"); break;
+
+                case BPT_VSRAM_R: snprintf(tmp, sizeof(tmp), "%s", "VSRAM_R"); break;
+                case BPT_VSRAM_W: snprintf(tmp, sizeof(tmp), "%s", "VSRAM_W"); break;
+                case BPT_VSRAM_RW: snprintf(tmp, sizeof(tmp), "%s", "VSRAM_RW"); break;
+
+                // Z80
+                case BPT_Z80_R: snprintf(tmp, sizeof(tmp), "%s", "Z80_R"); break;
+                case BPT_Z80_W: snprintf(tmp, sizeof(tmp), "%s", "Z80_W"); break;
+                case BPT_Z80_RW: snprintf(tmp, sizeof(tmp), "%s", "Z80_RW"); break;
+
+                // REGS
+                case BPT_VDP_REG:
+                case BPT_M68K_REG:
+                    break;
+                }
                 plvdi->item.pszText = tmp;
             } break;
             default:
@@ -1017,137 +900,7 @@ LRESULT CALLBACK DisasseblerWndProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
     } break;
     case WM_COMMAND:
     {
-        if (HIWORD(wParam) == BN_CLICKED)
-        {
-            switch (LOWORD(wParam))
-            {
-            case IDC_SR_T:
-            case IDC_SR_0E:
-            case IDC_SR_S:
-            case IDC_SR_M:
-            case IDC_SR_0B:
-            case IDC_SR_07:
-            case IDC_SR_06:
-            case IDC_SR_05:
-            case IDC_SR_X:
-            case IDC_SR_N:
-            case IDC_SR_Z:
-            case IDC_SR_V:
-            case IDC_SR_C:
-            {
-                unsigned short sr = update_sr_reg();
-                UpdateDlgItemHex(disHwnd, IDC_REG_SR, 4, sr);
-
-                dbg_req->data.regs_data.type = REG_TYPE_M68K;
-                dbg_req->data.regs_data.data.any_reg.index = 17; // m68k.h -> M68K_REG_SR
-                dbg_req->data.regs_data.data.any_reg.val = sr;
-                dbg_req->req_type = REQ_SET_REG;
-                send_dbg_request();
-            } break;
-            case IDC_STEP_INTO:
-            case IDC_STEP_INTO_HK:
-                dbg_req->req_type = REQ_STEP_INTO;
-                send_dbg_request();
-                break;
-            case IDC_STEP_OVER:
-            case IDC_STEP_OVER_HK:
-                dbg_req->req_type = REQ_STEP_OVER;
-                send_dbg_request();
-                break;
-            case IDC_RUN_EMU:
-            case IDC_RUN_EMU_HK:
-                if (!paused)
-                    break;
-                dbg_req->req_type = REQ_RESUME;
-                send_dbg_request();
-                paused = true;
-                break;
-            case IDC_PAUSE_EMU:
-            case IDC_PAUSE_EMU_HK:
-                if (paused)
-                    break;
-
-                dbg_req->req_type = REQ_PAUSE;
-                send_dbg_request();
-                paused = false;
-                break;
-            case IDC_ADD_BREAK_POS_HK:
-            {
-                int lineIndex = (int)SendMessage(listHwnd, EM_LINEFROMCHAR, -1, 0);
-                unsigned int address = lineIndexToPc(lineIndex);
-
-                bool was_deleted = false;
-                for (int i = 0; i < dbg_req->bpt_list.count; ++i)
-                {
-                    if (address == dbg_req->bpt_list.breaks[i].address)
-                    {
-                        bpt_data_t *bpt_data = &dbg_req->data.bpt_data;
-                        bpt_data->address = address;
-                        bpt_data->type = BPT_M68K_E;
-                        bpt_data->width = 1;
-                        dbg_req->req_type = REQ_DEL_BREAK;
-                        was_deleted = true;
-                        break;
-                    }
-                }
-
-                if (!was_deleted)
-                {
-                    bpt_data_t *bpt_data = &dbg_req->data.bpt_data;
-                    bpt_data->address = address;
-                    bpt_data->type = BPT_M68K_E;
-                    bpt_data->width = 1;
-                    dbg_req->req_type = REQ_ADD_BREAK;
-                }
-
-                send_dbg_request();
-                update_dbg_window_info();
-            } break;
-            case IDC_ADD_BREAK:
-            {
-                bpt_data_t *bpt_data = &dbg_req->data.bpt_data;
-                bpt_data->address = GetDlgItemHex(disHwnd, IDC_BPT_ADDR);
-                bpt_data->address += (bpt_data->address < MAXROMSIZE) ? 0 : 0xFF000000;
-                int bpt_type = (int)SendMessage(GetDlgItem(disHwnd, IDC_BPT_SIZE), CB_GETCURSEL, 0, 0);
-
-                switch (bpt_type)
-                {
-                case 1: bpt_data->width = 2; break;
-                case 2: bpt_data->width = 4; break;
-                default: bpt_data->width = 1; break;
-                }
-
-                bpt_data->type = (bpt_type_t)(IsDlgButtonChecked(disHwnd, IDC_EXEC_BPT) ? BPT_M68K_E :
-                    ((IsDlgButtonChecked(disHwnd, IDC_BPT_IS_READ) ? BPT_M68K_R : 0) | (IsDlgButtonChecked(disHwnd, IDC_BPT_IS_WRITE) ? BPT_M68K_W : 0)));
-                dbg_req->req_type = REQ_ADD_BREAK;
-                send_dbg_request();
-                update_dbg_window_info();
-            } break;
-            case IDC_DEL_BREAK:
-            {
-                bpt_data_t *bpt_data = &dbg_req->data.bpt_data;
-                int index = ListView_GetNextItem(GetDlgItem(disHwnd, IDC_BPT_LIST), -1, LVNI_SELECTED);
-
-                if (index != -1)
-                {
-                    bpt_data_t *bpt_item = &dbg_req->bpt_list.breaks[index];
-
-                    bpt_data->address = bpt_item->address;
-                    bpt_data->type = bpt_item->type;
-                    dbg_req->req_type = REQ_DEL_BREAK;
-                    send_dbg_request();
-                    update_dbg_window_info();
-                }
-            } break;
-            case IDC_CLEAR_BREAKS:
-                dbg_req->req_type = REQ_CLEAR_BREAKS;
-                send_dbg_request();
-                update_dbg_window_info();
-            }
-
-            return TRUE;
-        }
-        else if ((HIWORD(wParam) == EN_CHANGE))
+        if ((HIWORD(wParam) == EN_CHANGE))
         {
             return FALSE;
         }
@@ -1161,6 +914,9 @@ LRESULT CALLBACK DisasseblerWndProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
             std::string newText = GetDlgItemString(hWnd, LOWORD(wParam));
             if (newText != previousText)
             {
+                if (!paused)
+                    break;
+
                 int value = GetDlgItemHex(hWnd, LOWORD(wParam));
                 switch (LOWORD(wParam))
                 {
@@ -1226,16 +982,178 @@ LRESULT CALLBACK DisasseblerWndProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
                     break;
                 }
             }
+            return TRUE;
         }
+        switch (LOWORD(wParam))
+        {
+        case IDC_SR_T:
+        case IDC_SR_0E:
+        case IDC_SR_S:
+        case IDC_SR_M:
+        case IDC_SR_0B:
+        case IDC_SR_07:
+        case IDC_SR_06:
+        case IDC_SR_05:
+        case IDC_SR_X:
+        case IDC_SR_N:
+        case IDC_SR_Z:
+        case IDC_SR_V:
+        case IDC_SR_C:
+        {
+            if (!paused)
+                break;
+
+            unsigned short sr = update_sr_reg();
+            UpdateDlgItemHex(disHwnd, IDC_REG_SR, 4, sr);
+
+            set_m68k_reg(17, sr);
+        } break;
+        case IDC_STEP_INTO:
+        case IDC_STEP_INTO_HK:
+            if (!paused)
+                break;
+
+            send_dbg_request(dbg_req, REQ_STEP_INTO);
+            break;
+        case IDC_STEP_OVER:
+        case IDC_STEP_OVER_HK:
+            if (!paused)
+                break;
+
+            send_dbg_request(dbg_req, REQ_STEP_OVER);
+            break;
+        case IDC_RUN_EMU:
+        case IDC_RUN_EMU_HK:
+            if (!paused)
+                break;
+            send_dbg_request(dbg_req, REQ_RESUME);
+            paused = false;
+            break;
+        case IDC_PAUSE_EMU:
+        case IDC_PAUSE_EMU_HK:
+            if (paused)
+                break;
+
+            send_dbg_request(dbg_req, REQ_PAUSE);
+            paused = true;
+            break;
+        case IDC_ADD_BREAK_POS_HK:
+        {
+            int lineIndex = (int)SendMessage(listHwnd, EM_LINEFROMCHAR, -1, 0);
+            unsigned int address = lineIndexToPc(lineIndex);
+
+            bool was_deleted = false;
+            for (int i = 0; i < dbg_req->bpt_list.count; ++i)
+            {
+                if (address == dbg_req->bpt_list.breaks[i].address)
+                {
+                    bpt_data_t *bpt_data = &dbg_req->bpt_data;
+                    bpt_data->address = address;
+                    bpt_data->type = BPT_M68K_E;
+                    bpt_data->width = 1;
+                    send_dbg_request(dbg_req, REQ_DEL_BREAK);
+                    was_deleted = true;
+                    break;
+                }
+            }
+
+            if (!was_deleted)
+            {
+                bpt_data_t *bpt_data = &dbg_req->bpt_data;
+                bpt_data->address = address;
+                bpt_data->type = BPT_M68K_E;
+                bpt_data->width = 1;
+                send_dbg_request(dbg_req, REQ_ADD_BREAK);
+            }
+
+            update_dbg_window_info(false, true, true);
+        } break;
+        case IDC_ADD_BREAK:
+        {
+            bpt_data_t *bpt_data = &dbg_req->bpt_data;
+            bpt_data->address = GetDlgItemHex(disHwnd, IDC_BPT_ADDR);
+            bpt_data->address += (bpt_data->address < MAXROMSIZE) ? 0 : 0xFF000000;
+            int bpt_type = (int)SendMessage(GetDlgItem(disHwnd, IDC_BPT_SIZE), CB_GETCURSEL, 0, 0);
+
+            switch (bpt_type)
+            {
+            case 1: bpt_data->width = 2; break;
+            case 2: bpt_data->width = 4; break;
+            default: bpt_data->width = 1; break;
+            }
+
+            if (IsDlgButtonChecked(disHwnd, IDC_EXEC_BPT))
+                bpt_data->type = BPT_M68K_E;
+            else if (IsDlgButtonChecked(disHwnd, IDC_68K_RAM_BPT))
+            {
+                if (IsDlgButtonChecked(disHwnd, IDC_BPT_IS_READ))
+                    bpt_data->type = BPT_M68K_R;
+                if (IsDlgButtonChecked(disHwnd, IDC_BPT_IS_WRITE))
+                    bpt_data->type = (bpt_type_t)((int)bpt_data->type | (int)BPT_M68K_W);
+            }
+            else if (IsDlgButtonChecked(disHwnd, IDC_VRAM_BPT))
+            {
+                if (IsDlgButtonChecked(disHwnd, IDC_BPT_IS_READ))
+                    bpt_data->type = BPT_VRAM_R;
+                if (IsDlgButtonChecked(disHwnd, IDC_BPT_IS_WRITE))
+                    bpt_data->type = (bpt_type_t)((int)bpt_data->type | (int)BPT_VRAM_W);
+            }
+            else if (IsDlgButtonChecked(disHwnd, IDC_CRAM_BPT))
+            {
+                if (IsDlgButtonChecked(disHwnd, IDC_BPT_IS_READ))
+                    bpt_data->type = BPT_CRAM_R;
+                if (IsDlgButtonChecked(disHwnd, IDC_BPT_IS_WRITE))
+                    bpt_data->type = (bpt_type_t)((int)bpt_data->type | (int)BPT_CRAM_W);
+            }
+            else if (IsDlgButtonChecked(disHwnd, IDC_VSRAM_BPT))
+            {
+                if (IsDlgButtonChecked(disHwnd, IDC_BPT_IS_READ))
+                    bpt_data->type = BPT_VSRAM_R;
+                if (IsDlgButtonChecked(disHwnd, IDC_BPT_IS_WRITE))
+                    bpt_data->type = (bpt_type_t)((int)bpt_data->type | (int)BPT_VSRAM_W);
+            }
+            else if (IsDlgButtonChecked(disHwnd, IDC_Z80_RAM_BPT))
+            {
+                if (IsDlgButtonChecked(disHwnd, IDC_BPT_IS_READ))
+                    bpt_data->type = BPT_Z80_R;
+                if (IsDlgButtonChecked(disHwnd, IDC_BPT_IS_WRITE))
+                    bpt_data->type = (bpt_type_t)((int)bpt_data->type | (int)BPT_Z80_W);
+            }
+
+            send_dbg_request(dbg_req, REQ_ADD_BREAK);
+
+            update_dbg_window_info(false, true, (bpt_data->type == BPT_M68K_E) ? true : false);
+        } break;
+        case IDC_DEL_BREAK:
+        {
+            bpt_data_t *bpt_data = &dbg_req->bpt_data;
+            int index = ListView_GetNextItem(GetDlgItem(disHwnd, IDC_BPT_LIST), -1, LVNI_SELECTED);
+
+            if (index != -1)
+            {
+                bpt_data_t *bpt_item = &dbg_req->bpt_list.breaks[index];
+
+                bpt_data->address = bpt_item->address;
+                bpt_data->type = bpt_item->type;
+                send_dbg_request(dbg_req, REQ_DEL_BREAK);
+                update_dbg_window_info(false, true, (bpt_item->type == BPT_M68K_E) ? true : false);
+            }
+        } break;
+        case IDC_CLEAR_BREAKS:
+            send_dbg_request(dbg_req, REQ_CLEAR_BREAKS);
+            update_dbg_window_info(false, true, true);
+        } break;
+
         return TRUE;
     } break;
     case WM_DESTROY:
     {
-        KillTimer(hWnd, UPDATE_DISASM_TIMER);
         KillTimer(hWnd, DBG_EVENTS_TIMER);
 
-        dbg_req->stop_debugging();
-        unwrap_debugger();
+        send_dbg_request(dbg_req, REQ_STOP);
+
+        TerminateThread(hThread, 0);
+        CloseHandle(hThread);
 
         PostQuitMessage(0);
         EndDialog(hWnd, 0);
@@ -1247,18 +1165,7 @@ LRESULT CALLBACK DisasseblerWndProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
 
 static bool openCapstone()
 {
-    bool error = (cap::cs_open(cap::CS_ARCH_M68K, cap::CS_MODE_M68K_000, &cs_handle) == cap::CS_ERR_OK);
-
-    cap::cs_opt_skipdata skipdata;
-    skipdata.callback = NULL;
-    skipdata.mnemonic = "dc.b";
-    skipdata.user_data = NULL;
-
-    cap::cs_option(cs_handle, cap::CS_OPT_SKIPDATA_SETUP, (size_t)&skipdata);
-
-    cap::cs_option(cs_handle, cap::CS_OPT_SKIPDATA, cap::CS_OPT_ON);
-
-    return error;
+    return (cap::cs_open(cap::CS_ARCH_M68K, cap::CS_MODE_M68K_000, &cs_handle) == cap::CS_ERR_OK);
 }
 
 static void closeCapstone()
@@ -1300,21 +1207,12 @@ static DWORD WINAPI ThreadProc(LPVOID lpParam)
 
 void create_disassembler()
 {
-    activate_shared_mem();
-    wrap_debugger();
-    dbg_req->start_debugging();
+    dbg_req = open_shared_mem();
     hThread = CreateThread(0, NULL, ThreadProc, NULL, NULL, NULL);
 }
 
 void destroy_disassembler()
 {
+    close_shared_mem(&dbg_req);
     DestroyWindow(disHwnd);
-    TerminateThread(hThread, 0);
-    CloseHandle(hThread);
-    deactivate_shared_mem();
-}
-
-void update_disassembler()
-{
-    dbg_req->handle_request();
 }
