@@ -1605,12 +1605,13 @@ LRESULT CALLBACK VDPRamProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
 
         VDPRamHWnd = NULL;
-        EndDialog(hDlg, true);
-        return true;
+        PostQuitMessage(0);
+        EndDialog(hDlg, 0);
+        return TRUE;
     } break;
     }
 
-    return false;
+    return FALSE;
 }
 
 static DWORD WINAPI ThreadProc(LPVOID lpParam)
@@ -1619,7 +1620,7 @@ static DWORD WINAPI ThreadProc(LPVOID lpParam)
 
     VDPRamHWnd = CreateDialog(dbg_wnd_hinst, MAKEINTRESOURCE(IDD_VDPRAM), dbg_window, (DLGPROC)VDPRamProc);
 
-    while (GetMessage(&messages, VDPRamHWnd, 0, 0))
+    while (GetMessage(&messages, NULL, 0, 0))
     {
         TranslateMessage(&messages);
         DispatchMessage(&messages);
@@ -1635,12 +1636,13 @@ void create_vdp_ram_debug()
 
 void destroy_vdp_ram_debug()
 {
-    DestroyWindow(VDPRamHWnd);
-    TerminateThread(hThread, 0);
+    SendMessage(VDPRamHWnd, WM_CLOSE, 0, 0);
+
     CloseHandle(hThread);
 }
 
 void update_vdp_ram_debug()
 {
-    SendMessage(VDPRamHWnd, UpdateMSG, 0, 0);
+    if (VDPRamHWnd)
+        SendMessage(VDPRamHWnd, UpdateMSG, 0, 0);
 }
