@@ -449,7 +449,7 @@ void process_request()
             {
             case REQ_READ_68K_ROM: mem_data->m68k_rom[mem_data->address + i] = m68ki_read_8(mem_data->address + i); break;
             case REQ_READ_68K_RAM: mem_data->m68k_ram[(mem_data->address & 0xFFFF) + i] = m68ki_read_8(mem_data->address + i); break;
-            case REQ_READ_Z80: mem_data->z80_ram[mem_data->address + i] = z80_readmem(mem_data->address + i); break;
+            case REQ_READ_Z80: mem_data->z80_ram[(mem_data->address & 0x1FFF) + i] = z80_readmem(mem_data->address + i); break;
             default:
                 break;
             }
@@ -470,7 +470,7 @@ void process_request()
             {
             case REQ_WRITE_68K_ROM: m68ki_write_8(mem_data->address + i, mem_data->m68k_rom[mem_data->address + i]); break;
             case REQ_WRITE_68K_RAM: m68ki_write_8(0xFF0000 + (mem_data->address & 0xFFFF) + i, mem_data->m68k_ram[(mem_data->address & 0xFFFF) + i]); break;
-            case REQ_WRITE_Z80: z80_writemem(mem_data->address + i, mem_data->z80_ram[mem_data->address + i]); break;
+            case REQ_WRITE_Z80: z80_writemem(mem_data->address + i, mem_data->z80_ram[(mem_data->address & 0x1FFF) + i]); break;
             default:
                 break;
             }
@@ -498,6 +498,10 @@ void process_request()
         for (int i = 0; i < bpt_list->count; ++i)
             get_bpt_data(i, &bpt_list->breaks[i]);
     } break;
+    case REQ_ATTACH:
+        activate_debugger();
+        dbg_first_paused = 0;
+        break;
     case REQ_PAUSE:
         pause_debugger();
         break;
@@ -585,7 +589,7 @@ void process_breakpoints() {
         return;
     }
 
-    if (dbg_paused)
+    if (dbg_paused && dbg_first_paused)
         longjmp(jmp_env, 1);
 
     unsigned int pc = m68k_get_reg(M68K_REG_PC);
@@ -634,7 +638,7 @@ void process_breakpoints() {
         send_dbg_event(DBG_EVT_PAUSED);
     }
 
-    if (dbg_paused && !is_step_in && !is_step_over)
+    if (dbg_paused && (!is_step_in || is_step_over))
     {
         longjmp(jmp_env, 1);
     }
