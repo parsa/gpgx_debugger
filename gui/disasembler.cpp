@@ -32,11 +32,13 @@ namespace cap
 #define LINES_MAX 25
 #define DISASM_LISTING_BYTES 0x200
 #define ROM_CODE_START_ADDR ((unsigned int)0x200)
-#define RAM_START_ADDR ((unsigned int)0xFFFF0000)
+#define RAM_START_ADDR ((unsigned int)0xFF0000)
 #define DISASM_LISTING_BKGN (RGB(0xCC, 0xFF, 0xFF))
 #define CURR_PC_COLOR (RGB(0x60, 0xD0, 0xFF))
 #define BPT_COLOR (RGB(0xFF, 0, 0))
+#define BPT_COLOR_DISABLED (RGB(0, 0xFF, 0))
 #define BPT_COLOR_PC (RGB(0xA0, 0xA0, 0xFF))
+#define BPT_COLOR_PC_DISABLED (RGB(0x20, 0x80, 0x40))
 
 static dbg_request_t *dbg_req = NULL;
 static HANDLE hThread = NULL;
@@ -647,10 +649,10 @@ static void update_disasm_with_bpt_list(unsigned int pc)
         bpt_data_t *bpt_data = &dbg_req->bpt_list.breaks[i];
 
         if (bpt_data->type == BPT_M68K_E)
-            addExtraSelection(bpt_data->address, BPT_COLOR);
+            addExtraSelection(bpt_data->address, bpt_data->enabled ? BPT_COLOR : BPT_COLOR_DISABLED);
 
         if (bpt_data->type == BPT_M68K_E && bpt_data->address == pc)
-            changeExtraSelection(pc, BPT_COLOR_PC);
+            changeExtraSelection(pc, bpt_data->enabled ? BPT_COLOR_PC : BPT_COLOR_PC_DISABLED);
     }
 
     SetScrollInfo(listHwnd, SB_VERT, &si, TRUE);
@@ -744,7 +746,7 @@ static void update_disasm_listing(unsigned int pc)
 
     get_disasm_listing_pc(
         real_pc,
-        (pc < MAXROMSIZE) ? &dbg_req->mem_data.m68k_rom[pc] : &dbg_req->mem_data.m68k_ram[pc - RAM_START_ADDR],
+        (pc < MAXROMSIZE) ? &dbg_req->mem_data.m68k_rom[pc] : &dbg_req->mem_data.m68k_ram[(pc - RAM_START_ADDR) & 0xFFFF],
         dbg_req->mem_data.size,
         LINES_MAX);
 }
@@ -810,6 +812,41 @@ static void check_debugger_events()
     dbg_event->type = DBG_EVT_NO_EVENT;
 }
 
+static void delete_breakpoint_from_list(int index)
+{
+    if (index != -1)
+    {
+        bpt_data_t *bpt_item = &dbg_req->bpt_list.breaks[index];
+
+        bpt_data_t *bpt_data = &dbg_req->bpt_data;
+        bpt_data->address = bpt_item->address;
+        bpt_data->type = bpt_item->type;
+        send_dbg_request(dbg_req, REQ_DEL_BREAK);
+        update_dbg_window_info(false, true, (bpt_item->type == BPT_M68K_E) ? true : false);
+    }
+}
+
+LRESULT CALLBACK BptListHandler(HWND hWnd, UINT uMsg, WPARAM wParam,
+    LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+{
+    switch (uMsg)
+    {
+    case WM_KEYDOWN:
+        if (GetKeyState(VK_CONTROL) & 0x8000) return FALSE;
+
+        switch (wParam)
+        {
+        case VK_DELETE:
+        {
+            int index = ListView_GetNextItem(GetDlgItem(disHwnd, IDC_BPT_LIST), -1, LVNI_SELECTED);
+            delete_breakpoint_from_list(index);
+        } break;
+        }
+        return TRUE;
+    }
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
 LRESULT CALLBACK DisasseblerWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message)
@@ -817,6 +854,7 @@ LRESULT CALLBACK DisasseblerWndProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
     case WM_INITDIALOG:
     {
         listHwnd = GetDlgItem(hWnd, IDC_DISASM_LIST);
+        
         SetFocus(listHwnd);
         set_listing_font("Liberation Mono", 9);
 
@@ -833,19 +871,41 @@ LRESULT CALLBACK DisasseblerWndProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
         UpdateDlgItemHex(hWnd, IDC_BPT_ADDR, 6, ROM_CODE_START_ADDR);
 
         HWND bpt_list = GetDlgItem(hWnd, IDC_BPT_LIST);
-        SendMessage(bpt_list, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT);
+        ListView_SetExtendedListViewStyle(bpt_list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
+
+        SetWindowSubclass(bpt_list, BptListHandler, 0, 0);
+
         LV_COLUMN column;
         memset(&column, 0, sizeof(column));
+        
+        column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+        column.pszText = (LPSTR)"";
+        column.cx = 25;
+        ListView_InsertColumn(bpt_list, 0, &column);
+        
         column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
         column.pszText = (LPSTR)"Address";
         column.cx = 0x42;
-        SendMessage(bpt_list, LVM_INSERTCOLUMN, 0, (LPARAM)&column);
+        column.iSubItem++;
+        ListView_InsertColumn(bpt_list, 1, &column);
+        
         column.cx = 0x30;
         column.pszText = (LPSTR)"Size";
-        SendMessage(bpt_list, LVM_INSERTCOLUMN, 1, (LPARAM)&column);
+        column.iSubItem++;
+        ListView_InsertColumn(bpt_list, 2, &column);
+
         column.cx = 0x52;
         column.pszText = (LPSTR)"Type";
-        SendMessage(bpt_list, LVM_INSERTCOLUMN, 2, (LPARAM)&column);
+        column.iSubItem++;
+        ListView_InsertColumn(bpt_list, 3, &column);
+
+        HWND header = ListView_GetHeader(bpt_list);
+
+        HDITEM hdi = { 0 };
+        hdi.mask = HDI_FORMAT;
+        Header_GetItem(header, 0, &hdi);
+        hdi.fmt |= HDF_FIXEDWIDTH;
+        Header_SetItem(header, 0, &hdi);
 
         SendMessage(GetDlgItem(hWnd, IDC_SR_I_SPIN), UDM_SETRANGE, 0, MAKELPARAM(100,0));
 
@@ -880,26 +940,67 @@ LRESULT CALLBACK DisasseblerWndProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
     {
         switch (((LPNMHDR)lParam)->code)
         {
+        case NM_CLICK:
+        {
+            HWND bpt_list = GetDlgItem(hWnd, IDC_BPT_LIST);
+            LPNMLISTVIEW nmlist = (LPNMLISTVIEW)lParam;
+
+            LVHITTESTINFO hitinfo;
+            hitinfo.pt = nmlist->ptAction;
+
+            int item = ListView_HitTest(bpt_list, &hitinfo);
+
+            if (item != -1)
+            {
+                if ((hitinfo.flags == LVHT_ONITEMSTATEICON))
+                {
+                    bpt_data_t *bpt_data = &dbg_req->bpt_list.breaks[nmlist->iItem];
+                    ListView_SetCheckState(bpt_list, nmlist->iItem, !bpt_data->enabled);
+                    ListView_RedrawItems(bpt_list, nmlist->iItem, nmlist->iItem);
+
+                    bpt_data_t *bpt_data_new = &dbg_req->bpt_data;
+                    bpt_data_new->address = bpt_data->address;
+                    bpt_data_new->type = bpt_data->type;
+                    bpt_data_new->width = bpt_data->width;
+
+                    send_dbg_request(dbg_req, REQ_TOGGLE_BREAK);
+                    update_dbg_window_info(false, true, true);
+                }
+            }
+            return 0;
+        } break;
         case LVN_GETDISPINFO:
         {
             NMLVDISPINFO *plvdi = (NMLVDISPINFO *)lParam;
+            NMLISTVIEW *nmList = (NMLISTVIEW *)lParam;
+            HWND bpt_list = GetDlgItem(hWnd, IDC_BPT_LIST);
 
             char tmp[32];
 
             bpt_data_t *bpt_data = &dbg_req->bpt_list.breaks[plvdi->item.iItem];
             switch (plvdi->item.iSubItem)
             {
-            case 0: // Address
+            case 0: // Enabled
+
+                if (plvdi->item.mask & LVIF_IMAGE)
+                {
+                    plvdi->item.mask |= LVIF_STATE;
+                    plvdi->item.stateMask = LVIS_STATEIMAGEMASK;
+                    plvdi->item.state = INDEXTOSTATEIMAGEMASK(bpt_data->enabled ? 2 : 1);
+                    return 0;
+                }
+                break;
+            case 1: // Address
             {
                 snprintf(tmp, sizeof(tmp), "%.6X", bpt_data->address & 0xFFFFFF);
                 plvdi->item.pszText = tmp;
             } break;
-            case 1: // Size
+            case 2: // Size
             {
                 snprintf(tmp, sizeof(tmp), "%d", bpt_data->width);
                 plvdi->item.pszText = tmp;
             } break;
-            case 2: // Type
+            case 3: // Type
             {
                 switch (bpt_data->type)
                 {
@@ -1090,6 +1191,7 @@ LRESULT CALLBACK DisasseblerWndProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
             dbg_req->dbg_active = 1;
             send_dbg_request(dbg_req, REQ_RESUME);
             paused = false;
+            changeExtraSelection(last_pc, DISASM_LISTING_BKGN);
             break;
         case IDC_PAUSE_EMU:
         case IDC_PAUSE_EMU_HK:
@@ -1123,6 +1225,7 @@ LRESULT CALLBACK DisasseblerWndProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
                 bpt_data->address = address;
                 bpt_data->type = BPT_M68K_E;
                 bpt_data->width = 1;
+                bpt_data->enabled = 1;
                 send_dbg_request(dbg_req, REQ_ADD_BREAK);
             }
 
@@ -1132,7 +1235,6 @@ LRESULT CALLBACK DisasseblerWndProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
         {
             bpt_data_t *bpt_data = &dbg_req->bpt_data;
             bpt_data->address = GetDlgItemHex(disHwnd, IDC_BPT_ADDR);
-            bpt_data->address += (bpt_data->address < MAXROMSIZE) ? 0 : 0xFF000000;
             int bpt_type = (int)SendMessage(GetDlgItem(disHwnd, IDC_BPT_SIZE), CB_GETCURSEL, 0, 0);
 
             switch (bpt_type)
@@ -1180,24 +1282,15 @@ LRESULT CALLBACK DisasseblerWndProc(HWND hWnd, UINT message, WPARAM wParam, LPAR
                     bpt_data->type = (bpt_type_t)((int)bpt_data->type | (int)BPT_Z80_W);
             }
 
+            bpt_data->enabled = 1;
             send_dbg_request(dbg_req, REQ_ADD_BREAK);
 
             update_dbg_window_info(false, true, (bpt_data->type == BPT_M68K_E) ? true : false);
         } break;
         case IDC_DEL_BREAK:
         {
-            bpt_data_t *bpt_data = &dbg_req->bpt_data;
             int index = ListView_GetNextItem(GetDlgItem(disHwnd, IDC_BPT_LIST), -1, LVNI_SELECTED);
-
-            if (index != -1)
-            {
-                bpt_data_t *bpt_item = &dbg_req->bpt_list.breaks[index];
-
-                bpt_data->address = bpt_item->address;
-                bpt_data->type = bpt_item->type;
-                send_dbg_request(dbg_req, REQ_DEL_BREAK);
-                update_dbg_window_info(false, true, (bpt_item->type == BPT_M68K_E) ? true : false);
-            }
+            delete_breakpoint_from_list(index);
         } break;
         case IDC_CLEAR_BREAKS:
             send_dbg_request(dbg_req, REQ_CLEAR_BREAKS);
@@ -1249,8 +1342,7 @@ static DWORD WINAPI ThreadProc(LPVOID lpParam)
 
     while (GetMessage(&msg, NULL, 0, 0))
     {
-        if (!TranslateAccelerator(disHwnd, hAccelTable, &msg))
-        {
+        if (!TranslateAccelerator(disHwnd, hAccelTable, &msg) && !IsDialogMessage(disHwnd, &msg)) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
