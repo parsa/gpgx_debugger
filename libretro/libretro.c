@@ -3954,7 +3954,7 @@ void retro_run(void)
    }
 
    audio_cb(soundbuffer, audio_update(soundbuffer));
-   update_gui();
+   process_request();
 }
 
 #undef  CHUNKSIZE
