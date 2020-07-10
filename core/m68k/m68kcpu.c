@@ -320,6 +320,9 @@ void m68k_run(unsigned int cycles)
     /* Record previous program counter */
     REG_PPC = REG_PC;
 
+    /* Record previous program counter */
+    REG_PPC = REG_PC;
+
     /* Decode next instruction */
     REG_IR = m68ki_read_imm_16();
 
