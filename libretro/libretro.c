@@ -3796,6 +3796,7 @@ void retro_deinit(void)
 
    g_rom_data = NULL;
    g_rom_size = 0;
+    stop_debugging();
 }
 
 void retro_reset(void)
