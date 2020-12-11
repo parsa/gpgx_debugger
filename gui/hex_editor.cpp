@@ -15,6 +15,56 @@
 
 static HANDLE hThread = NULL;
 
+typedef struct {
+    char Name[12];
+    unsigned char*  Array;
+    int Offset;
+    int Size;
+    int Active;
+    unsigned char   Swap;
+} HexRegion;
+
+typedef enum {
+    NO,
+    CELL,
+    TEXT
+} MousePos;
+
+typedef struct {
+    HDC  DC;
+    char InputDigit;
+    int
+        MouseButtonHeld, SecondDigitPrompted, Running,
+        TextView, DrawLines, FontBold;
+    int
+        FontHeight, FontWidth, FontWeight,
+        Gap, GapHeaderX, GapHeaderY,
+        CellHeight, CellWidth,
+        DialogPosX, DialogPosY,
+        OffsetVisibleFirst, OffsetVisibleTotal,
+        AddressSelectedFirst, AddressSelectedTotal, AddressSelectedLast;
+    COLORREF
+        ColorFont, ColorBG;
+    HexRegion CurrentRegion;
+    MousePos MouseArea;
+    SCROLLINFO SI;
+} HexParams;
+
+typedef struct {
+    unsigned char*  Array;
+    UINT Start;
+    UINT Size;
+    char*Name;
+} SymbolName;
+
+typedef struct {
+    unsigned char*  Array;
+    UINT Address;
+    UINT Value;
+    int Active;
+} HardPatch;
+
+HWND HexEditorHwnd = NULL;
 HexParams HexEditor;
 HexParams HexOrder;
 std::vector<SymbolName>  HexNames;
@@ -61,7 +111,7 @@ HexRegion HexRegions[] = {
 };
 
 HexParams HexCommon = {
-    NULL, NULL,					// HWND, DC
+    NULL,					// HWND, DC
     0,						    // instance limit, input digit
     0,						    // multiple instances, mouse button held
     0, 0,						// second digit prompted, running
@@ -125,15 +175,15 @@ void HexSetColors(HexParams *Hex, bool Selection) {
 
 void HexUpdateDialog(HexParams *Hex, int ClearBG) {
     if (ClearBG)
-        InvalidateRect(Hex->Hwnd, NULL, TRUE);
+        InvalidateRect(HexEditorHwnd, NULL, TRUE);
     else
-        InvalidateRect(Hex->Hwnd, NULL, FALSE);
+        InvalidateRect(HexEditorHwnd, NULL, FALSE);
 }
 
 void HexUpdateCommon(HexParams *Hex) {
     RECT r;
-    if (!IsIconic(Hex->Hwnd)) {
-        GetWindowRect(Hex->Hwnd, &r);
+    if (!IsIconic(HexEditorHwnd)) {
+        GetWindowRect(HexEditorHwnd, &r);
         HexCommon.DialogPosX = HexCap(r.left, GetSystemMetrics(SM_CXSCREEN) - (r.right - r.left), 1);
         HexCommon.DialogPosY = HexCap(r.top, GetSystemMetrics(SM_CYSCREEN) - (r.bottom - r.top), 1);
         HexCommon.DialogPosX = HexCap(HexCommon.DialogPosX, 0, 0);
@@ -266,7 +316,7 @@ void HexUpdateCaption(HexParams *Hex) {
             SELECTION_START + Hex->CurrentRegion.Offset,
             SELECTION_END + Hex->CurrentRegion.Offset,
             Hex->AddressSelectedTotal);
-    SetWindowText(Hex->Hwnd, str);
+    SetWindowText(HexEditorHwnd, str);
     return;
 }
 
@@ -382,7 +432,7 @@ void HexCopy(HexParams *Hex, char type)
 void HexPaste(HexParams *Hex, UINT8 type) {
     char result;
     Hex->SecondDigitPrompted = 0;
-    OpenClipboard(Hex->Hwnd);
+    OpenClipboard(HexEditorHwnd);
     HGLOBAL hGlobal = GetClipboardData(CF_TEXT);
     if (hGlobal == NULL) {
         CloseClipboard();
@@ -456,7 +506,7 @@ void HexDestroySelection(HexParams *Hex) {
 
 void HexSwitchRegion(HexParams *Hex) {
     RECT r;
-    GetClientRect(Hex->Hwnd, &r);
+    GetClientRect(HexEditorHwnd, &r);
     Hex->SI.nPage = r.bottom / Hex->CellHeight - 1;
     for (int i = 0; i < REGION_COUNT, HexRegions[i].Active; i++)
         CheckMenuItem(HexRegionsMenu, IDC_C_HEX_REGION + i,
@@ -473,15 +523,15 @@ void HexSwitchRegion(HexParams *Hex) {
 void HexDestroyDialog(HexParams *Hex) {
     HexUpdateCommon(Hex);
     HexDestroySelection(Hex);
-    ReleaseDC(Hex->Hwnd, Hex->DC);
+    ReleaseDC(HexEditorHwnd, Hex->DC);
 
     DeleteObject(HexFont);
     HexFont = 0;
     HexUnloadSymbols();
 
-    DestroyWindow(Hex->Hwnd);
+    DestroyWindow(HexEditorHwnd);
 
-    Hex->Hwnd = 0;
+    HexEditorHwnd = NULL;
     Hex->Running = 0;
 }
 
@@ -516,7 +566,7 @@ LRESULT CALLBACK HexGoToProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
         case IDOK: {
             GetDlgItemText(hDlg, IDC_PROMPT_EDIT, Str_Tmp, 10);
             int Address;
-            if ((strnicmp(Str_Tmp, "ff", 2) == 0) && (sscanf(Str_Tmp + 2, "%x", &Address)))
+            if ((_strnicmp(Str_Tmp, "ff", 2) == 0) && (sscanf(Str_Tmp + 2, "%x", &Address)))
                 HexGoToAddress(Hex, Address);
             EndDialog(hDlg, true);
             return true;
@@ -557,7 +607,7 @@ LRESULT CALLBACK HexEditorProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
     case WM_CREATE: {
         HexEditorMenu = GetMenu(hDlg);
         HexRegionsMenu = CreatePopupMenu();
-        InsertMenu(HexEditorMenu, GetMenuItemCount(HexEditorMenu) + 1, MF_BYPOSITION | MF_POPUP | MF_STRING,
+        InsertMenu(HexEditorMenu, GetMenuItemCount(HexEditorMenu), MF_BYPOSITION | MF_POPUP | MF_STRING,
             (UINT_PTR)HexRegionsMenu, "&Region");
         for (int i = 0; i < REGION_COUNT, HexRegions[i].Active; i++)
             InsertMenu(HexRegionsMenu, i,
@@ -988,6 +1038,13 @@ LRESULT CALLBACK HexEditorProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
         HexDestroyDialog(Hex);
         UnregisterClass("HEXEDITOR", dbg_wnd_hinst);
         PostQuitMessage(0);
+
+        if (hThread) {
+            TerminateThread(hThread, 0);
+            CloseHandle(hThread);
+            hThread = 0;
+        }
+
         return FALSE;
     }
     return DefWindowProc(hDlg, uMsg, wParam, lParam);
@@ -1003,8 +1060,8 @@ void HexCreateDialog() {
     wndclass.cbClsExtra = 0;
     wndclass.cbWndExtra = sizeof(HexParams *);
     wndclass.hInstance = dbg_wnd_hinst;
-    //wndclass.hIcon = LoadIcon(dbg_wnd_hinst, MAKEINTRESOURCE(IDI_GENS));
-    //wndclass.hIconSm = LoadIcon(dbg_wnd_hinst, MAKEINTRESOURCE(IDI_GENS));
+    wndclass.hIcon = LoadIcon(dbg_wnd_hinst, MAKEINTRESOURCE(IDI_GENS));
+    wndclass.hIconSm = LoadIcon(dbg_wnd_hinst, MAKEINTRESOURCE(IDI_GENS));
     wndclass.hCursor = LoadCursor(NULL, IDC_ARROW);
     wndclass.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
     wndclass.lpszMenuName = "HEXEDITOR_MENU";
@@ -1021,10 +1078,10 @@ void HexCreateDialog() {
         CLIP_MASK, DEFAULT_QUALITY,		// clipping, quality
         DEFAULT_PITCH, "Courier New"); 	// pitch, name
     HexLoadSymbols();
-    HexEditor.Hwnd = CreateWindowEx(0, "HEXEDITOR", "Hex Editor",
+    HexEditorHwnd = CreateWindowEx(0, "HEXEDITOR", "Hex Editor",
         WS_SYSMENU | WS_SIZEBOX | WS_MINIMIZEBOX | WS_VSCROLL,
         0, 0, 100, 100, NULL, NULL, dbg_wnd_hinst, &HexEditor);
-    ShowWindow(HexEditor.Hwnd, SW_SHOW);
+    ShowWindow(HexEditorHwnd, SW_SHOW);
     HexUpdateCaption(&HexEditor);
 }
 
@@ -1034,36 +1091,53 @@ static DWORD WINAPI ThreadProc(LPVOID lpParam)
 
     HexCreateDialog();
 
+    HANDLE hMutex = CreateMutex(NULL, FALSE, HEX_EDITOR_MUTEX);
+
     while (GetMessage(&msg, NULL, 0, 0))
     {
-        if (HexEditor.Hwnd && IsDialogMessage(HexEditor.Hwnd, &msg))
+        if (IsDialogMessage(HexEditorHwnd, &msg))
         {
             if (msg.message == WM_CHAR)
-                SendMessage(HexEditor.Hwnd, msg.message, msg.wParam, msg.lParam);
+                SendMessage(HexEditorHwnd, msg.message, msg.wParam, msg.lParam);
         }
-    
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+        else
+        {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
     }
+
+    CloseHandle(hMutex);
 
     return 1;
 }
 
 void create_hex_editor()
 {
-    hThread = CreateThread(0, NULL, ThreadProc, NULL, NULL, NULL);
+    if (HexEditorHwnd == NULL) {
+        hThread = CreateThread(0, NULL, ThreadProc, NULL, NULL, NULL);
+    }
+    else {
+        SetForegroundWindow(HexEditorHwnd);
+    }
 }
 
 void destroy_hex_editor()
 {
-    SendMessage(HexEditor.Hwnd, WM_CLOSE, 0, 0);
+    if (HexEditorHwnd) {
+        SendMessage(HexEditorHwnd, WM_CLOSE, 0, 0);
+    }
 
-    TerminateThread(hThread, 0);
-    CloseHandle(hThread);
+    if (hThread) {
+        TerminateThread(hThread, 0);
+        CloseHandle(hThread);
+        hThread = 0;
+    }
 }
 
 void update_hex_editor()
 {
-    if (HexEditor.Hwnd)
+    if (HexEditorHwnd) {
         HexUpdateDialog(&HexEditor, 0);
+    }
 }
