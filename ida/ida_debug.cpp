@@ -176,38 +176,31 @@ static drc_t idaapi term_debugger(void)
 {
     if (dbg_req)
     {
-        dbg_req->is_ida = 0;
         close_shared_mem(&dbg_req);
     }
     return DRC_OK;
 }
 
-static drc_t get_processes(procinfo_vec_t* procs, qstring* errbuf = NULL) {
-    return DRC_OK;
-}
-
 static int idaapi check_debugger_events(void *ud)
 {
-    while (dbg_req->dbg_active || dbg_req->dbg_events_count)
+    while (dbg_req->dbg_active || dbg_req->dbg_events_count_ida)
     {
-        dbg_req->is_ida = 1;
-
-        int event_index = recv_dbg_event(dbg_req, 0);
+        int event_index = recv_dbg_event_ida(dbg_req, 0);
         if (event_index == -1)
         {
             qsleep(10);
             continue;
         }
 
-        debugger_event_t *dbg_event = &dbg_req->dbg_events[event_index];
+        debugger_event_t *dbg_event = &dbg_req->dbg_events_ida[event_index];
 
         debug_event_t ev;
         switch (dbg_event->type)
         {
-        case dbg_event_type_t::DBG_EVT_STARTED:
+        case dbg_event_type_t::DBG_EVT_STARTED: {
             ev.pid = 1;
             ev.tid = 1;
-            ev.ea = BADADDR;
+            ev.ea = dbg_event->pc;
             ev.handled = true;
 
             ev.set_modinfo(PROCESS_STARTED).name.sprnt("GPGX");
@@ -216,16 +209,16 @@ static int idaapi check_debugger_events(void *ud)
             ev.set_modinfo(PROCESS_STARTED).rebase_to = BADADDR;
 
             g_events.enqueue(ev, IN_FRONT);
-            break;
-        case dbg_event_type_t::DBG_EVT_PAUSED:
+        } break;
+        case dbg_event_type_t::DBG_EVT_PAUSED: {
             ev.pid = 1;
             ev.tid = 1;
             ev.ea = dbg_event->pc;
             ev.handled = true;
             ev.set_eid(PROCESS_SUSPENDED);
             g_events.enqueue(ev, IN_BACK);
-            break;
-        case dbg_event_type_t::DBG_EVT_BREAK:
+        } break;
+        case dbg_event_type_t::DBG_EVT_BREAK: {
             ev.pid = 1;
             ev.tid = 1;
             ev.ea = dbg_event->pc;
@@ -233,22 +226,22 @@ static int idaapi check_debugger_events(void *ud)
             ev.set_eid(BREAKPOINT);
             ev.set_bpt().hea = ev.set_bpt().kea = ev.ea;
             g_events.enqueue(ev, IN_BACK);
-            break;
-        case dbg_event_type_t::DBG_EVT_STEP:
+        } break;
+        case dbg_event_type_t::DBG_EVT_STEP: {
             ev.pid = 1;
             ev.tid = 1;
             ev.ea = dbg_event->pc;
             ev.handled = true;
             ev.set_eid(STEP);
             g_events.enqueue(ev, IN_BACK);
-            break;
-        case dbg_event_type_t::DBG_EVT_STOPPED:
+        } break;
+        case dbg_event_type_t::DBG_EVT_STOPPED: {
             ev.pid = 1;
             ev.handled = true;
             ev.set_exit_code(PROCESS_EXITED, 0);
 
             g_events.enqueue(ev, IN_BACK);
-            break;
+        } break;
         default:
             break;
         }
@@ -274,21 +267,29 @@ static drc_t idaapi s_start_process(const char *path,
 
     if (!dbg_req)
     {
-        show_wait_box("HIDECANCEL\nWaiting for connection to plugin...");
+        show_wait_box("Waiting for connection to plugin...");
 
         while (!dbg_req)
         {
             dbg_req = open_shared_mem();
+
+            if (user_cancelled()) {
+                break;
+            }
         }
 
         hide_wait_box();
     }
 
-    events_thread = qthread_create(check_debugger_events, NULL);
+    if (dbg_req) {
+        events_thread = qthread_create(check_debugger_events, NULL);
 
-    send_dbg_request(dbg_req, request_type_t::REQ_ATTACH);
+        send_dbg_request(dbg_req, request_type_t::REQ_ATTACH);
 
-    return DRC_OK;
+        return DRC_OK;
+    }
+
+    return DRC_FAILED;
 }
 
 static drc_t idaapi prepare_to_pause_process(qstring *errbuf)
@@ -384,6 +385,8 @@ static drc_t idaapi read_registers(thid_t tid, int clsmask, regval_t *values, qs
         values[(int)regs_all_t::REG_68K_PC].ival = reg_vals->pc & 0xFFFFFF;
         values[(int)regs_all_t::REG_68K_SR].ival = reg_vals->sr;
         values[(int)regs_all_t::REG_68K_SP].ival = reg_vals->sp & 0xFFFFFF;
+        values[(int)regs_all_t::REG_68K_USP].ival = reg_vals->usp & 0xFFFFFF;
+        values[(int)regs_all_t::REG_68K_ISP].ival = reg_vals->isp & 0xFFFFFF;
         values[(int)regs_all_t::REG_68K_PPC].ival = reg_vals->ppc & 0xFFFFFF;
         values[(int)regs_all_t::REG_68K_IR].ival = reg_vals->ir;
     }
@@ -624,6 +627,15 @@ static drc_t idaapi update_bpts(int* nbpts, update_bpt_info_t *bpts, int nadd, i
     return DRC_OK;
 }
 
+static drc_t s_get_processes(procinfo_vec_t* procs, qstring* errbuf) {
+    process_info_t info;
+    info.name.sprnt("gpgx");
+    info.pid = 1;
+    procs->add(info);
+
+    return DRC_OK;
+}
+
 static ssize_t idaapi idd_notify(void* , int msgid, va_list va) {
     drc_t retcode = DRC_NONE;
     qstring* errbuf;
@@ -646,13 +658,13 @@ static ssize_t idaapi idd_notify(void* , int msgid, va_list va) {
         retcode = term_debugger();
         break;
 
-    //case debugger_t::ev_get_processes:
-    //{
-    //    procinfo_vec_t* procs = va_arg(va, procinfo_vec_t*);
-    //    errbuf = va_arg(va, qstring*);
-    //    retcode = g_dbgmod.dbg_get_processes(procs, errbuf);
-    //}
-    //break;
+    case debugger_t::ev_get_processes:
+    {
+        procinfo_vec_t* procs = va_arg(va, procinfo_vec_t*);
+        errbuf = va_arg(va, qstring*);
+        retcode = s_get_processes(procs, errbuf);
+    }
+    break;
 
     case debugger_t::ev_start_process:
     {
@@ -749,19 +761,21 @@ static ssize_t idaapi idd_notify(void* , int msgid, va_list va) {
     //}
     //break;
 
-    //case debugger_t::ev_thread_suspend:
-    //{
-    //    thid_t tid = va_argi(va, thid_t);
-    //    retcode = g_dbgmod.dbg_thread_suspend(tid);
-    //}
-    //break;
+    case debugger_t::ev_thread_suspend:
+    {
+        thid_t tid = va_argi(va, thid_t);
+        pause_execution();
+        retcode = DRC_OK;
+    }
+    break;
 
-    //case debugger_t::ev_thread_continue:
-    //{
-    //    thid_t tid = va_argi(va, thid_t);
-    //    retcode = g_dbgmod.dbg_thread_continue(tid);
-    //}
-    //break;
+    case debugger_t::ev_thread_continue:
+    {
+        thid_t tid = va_argi(va, thid_t);
+        continue_execution();
+        retcode = DRC_OK;
+    }
+    break;
 
     case debugger_t::ev_set_resume_mode:
     {
@@ -907,8 +921,8 @@ debugger_t debugger =
     "GXIDA",
     0x8000 + 1,
     "m68k",
-    DBG_FLAG_NOHOST | DBG_FLAG_CAN_CONT_BPT | DBG_FLAG_FAKE_ATTACH | DBG_FLAG_SAFE | DBG_FLAG_NOPASSWORD | DBG_FLAG_NOSTARTDIR | DBG_FLAG_CONNSTRING | DBG_FLAG_ANYSIZE_HWBPT | DBG_FLAG_DEBTHREAD,
-    DBG_HAS_REQUEST_PAUSE | DBG_HAS_SET_RESUME_MODE | DBG_HAS_CHECK_BPT,
+    DBG_FLAG_NOHOST | DBG_FLAG_CAN_CONT_BPT | DBG_FLAG_FAKE_ATTACH | DBG_FLAG_SAFE | DBG_FLAG_NOPASSWORD | DBG_FLAG_NOSTARTDIR | DBG_FLAG_NOPARAMETERS | DBG_FLAG_ANYSIZE_HWBPT | DBG_FLAG_DEBTHREAD | DBG_FLAG_PREFER_SWBPTS,
+    DBG_HAS_GET_PROCESSES | DBG_HAS_REQUEST_PAUSE | DBG_HAS_SET_RESUME_MODE | DBG_HAS_CHECK_BPT | DBG_HAS_THREAD_SUSPEND | DBG_HAS_THREAD_CONTINUE,
 
     register_classes,
     RC_GENERAL,
