@@ -13,16 +13,16 @@ extern void stop_debugging();
 extern int is_debugger_accessible();
 extern void process_request();
 extern int is_debugger_paused();
-//void stop_debugging();
-//int is_debugger_active();
-//void send_dbg_request();
-//int recv_dbg_event(int wait);
-//void handle_dbg_commands();
-extern int activate_shared_mem();
-extern void deactivate_shared_mem();
-void check_breakpoint(bpt_type_t type, int width, unsigned int address, unsigned int value);
+extern void resume_debugger();
+extern void process_breakpoints(bpt_type_t type, int width, unsigned int address, unsigned int value);
 
-extern jmp_buf jmp_env, jmp_env2;
+extern int dbg_trace;
+extern int dbg_step_over;
+extern int dbg_in_interrupt;
+extern unsigned int dbg_step_over_addr;
+extern jmp_buf jmp_env;
+
+extern dbg_request_t* dbg_req_core;
 
 #ifdef __cplusplus
 }
