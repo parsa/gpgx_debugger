@@ -49,6 +49,7 @@
 #include "gui.h"
 
 #include "debug.h"
+#include "debug_wrap.h"
 jmp_buf jmp_env;
 
 #ifdef _MSC_VER
@@ -2206,12 +2207,12 @@ static void check_variables(bool first_run)
           if (is_debugger_accessible())
           {
               stop_debugging();
-              deactivate_shared_mem();
+              close_shared_mem(&dbg_req_core, 1);
           }
       }
       else
       {
-          activate_shared_mem();
+          dbg_req_core = create_shared_mem();
           start_debugging();
       }
   }
@@ -3764,7 +3765,6 @@ extern HINSTANCE GetHInstance();
 #define IDM_DBG_PLANE_EXPLORER (0x666 + 1)
 #define IDM_DBG_VDP_RAM (0x666 + 2)
 #define IDM_DBG_HEX_EDITOR (0x666 + 3)
-#define IDM_DBG_BREAKPOINTS (0x666 + 4)
 
 
 LRESULT CALLBACK dbgMenuHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
@@ -3782,9 +3782,6 @@ LRESULT CALLBACK dbgMenuHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
             } break;
             case IDM_DBG_HEX_EDITOR: {
                 create_hex_editor();
-            } break;
-            case IDM_DBG_BREAKPOINTS: {
-                create_breakpoints_window();
             } break;
             }
         } break;
@@ -3808,7 +3805,6 @@ static void create_menu_items() {
 
     AppendMenuA(rmenu, MF_POPUP, (UINT_PTR)dbgMenu, "&Debug");
     AppendMenuA(dbgMenu, MF_STRING | MF_ENABLED, IDM_DBG_HEX_EDITOR, "&Hex Editor");
-    AppendMenuA(dbgMenu, MF_STRING | MF_ENABLED, IDM_DBG_BREAKPOINTS, "&Breakpoints");
     AppendMenuA(dbgMenu, MF_STRING | MF_ENABLED, IDM_DBG_VDP_RAM, "&VDP Ram");
     AppendMenuA(dbgMenu, MF_STRING | MF_ENABLED, IDM_DBG_PLANE_EXPLORER, "&Plane Explorer");
 
@@ -3857,6 +3853,7 @@ void retro_deinit(void)
    g_rom_data = NULL;
    g_rom_size = 0;
     stop_debugging();
+    close_shared_mem(&dbg_req_core, 1);
 
     UnhookWindowsHookEx(dbgMenuHook);
     DestroyMenu(dbgMenu);
