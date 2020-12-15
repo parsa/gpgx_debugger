@@ -2199,24 +2199,6 @@ static void check_variables(bool first_run)
     }
   }
 #endif
-  var.key = "genesis_plus_gx_debugger";
-  environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var);
-  {
-      if (!var.value || !strcmp(var.value, "disabled"))
-      {
-          if (is_debugger_accessible())
-          {
-              stop_debugging();
-              close_shared_mem(&dbg_req_core, 1);
-          }
-      }
-      else
-      {
-          dbg_req_core = create_shared_mem();
-          start_debugging();
-      }
-  }
-
   if (reinit)
   {
 #ifdef HAVE_OVERCLOCK
@@ -2892,8 +2874,6 @@ void retro_set_environment(retro_environment_t cb)
       { "genesis_plus_gx_overclock", "CPU speed; 100%|125%|150%|175%|200%" },
 #endif
       { "genesis_plus_gx_no_sprite_limit", "Remove per-line sprite limit; disabled|enabled" },
-
-      { "genesis_plus_gx_debugger", "Debugger; disabled|enabled" },
       { NULL, NULL },
    };
 
@@ -3843,6 +3823,8 @@ void retro_init(void)
    retro_audio_buff_underrun  = false;
    audio_latency              = 0;
    update_audio_latency       = false;
+   dbg_req_core = create_shared_mem();
+   start_debugging();
 }
 
 void retro_deinit(void)
