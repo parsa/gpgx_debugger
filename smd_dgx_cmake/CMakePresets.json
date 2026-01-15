@@ -8,9 +8,10 @@
             "binaryDir": "${sourceDir}/out/build/${presetName}",
             "installDir": "${sourceDir}/out/install/${presetName}",
             "cacheVariables": {
-                "CMAKE_C_COMPILER": "cl.exe",
-                "CMAKE_CXX_COMPILER": "cl.exe"
-            },
+              "CMAKE_C_COMPILER": "cl.exe",
+              "CMAKE_CXX_COMPILER": "cl.exe",
+              "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" 
+          },
             "condition": {
                 "type": "equals",
                 "lhs": "${hostSystemName}",
@@ -18,9 +19,16 @@
             }
         },
         {
+          "name": "windows-base-vs",
+          "inherits": "windows-base",
+          "environment": {
+            "VCPKG_ROOT": "C:/Program Files/Microsoft Visual Studio/18/Community/VC/vcpkg"
+          }
+        },
+        {
             "name": "x64-debug",
             "displayName": "x64 Debug",
-            "inherits": "windows-base",
+            "inherits": "windows-base-vs",
             "architecture": {
                 "value": "x64",
                 "strategy": "external"
@@ -40,7 +48,7 @@
         {
             "name": "x86-debug",
             "displayName": "x86 Debug",
-            "inherits": "windows-base",
+            "inherits": "windows-base-vs",
             "architecture": {
                 "value": "x86",
                 "strategy": "external"
@@ -84,7 +92,8 @@
             "binaryDir": "${sourceDir}/out/build/${presetName}",
             "installDir": "${sourceDir}/out/install/${presetName}",
             "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug"
+              "CMAKE_BUILD_TYPE": "Debug",
+              "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" // Change for macOS vcpkg toolchain
             },
             "condition": {
                 "type": "equals",

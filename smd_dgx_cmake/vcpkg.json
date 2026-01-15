@@ -1,0 +1,8 @@
+{
+  "name": "smd-dgx",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "sdl3"
+  ],
+  "builtin-baseline": "529654938bfb23e2624e961b06d9b20cb47a6a9c"
+}

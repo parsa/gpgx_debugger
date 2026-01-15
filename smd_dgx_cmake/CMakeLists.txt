@@ -15,8 +15,10 @@ file(GLOB_RECURSE CORE_H CONFIGURE_DEPENDS "${GX_ROOT}/core/*.h")
 file(GLOB_RECURSE GX_C   CONFIGURE_DEPENDS "${GX_ROOT}/gx/*.c")
 file(GLOB_RECURSE GX_H   CONFIGURE_DEPENDS "${GX_ROOT}/gx/*.h")
 
-# list(FILTER GX_C EXCLUDE REGEX ".*/osd_.*\\.c")
-# list(FILTER GX_H EXCLUDE REGEX ".*/osd\\.h")
+list(FILTER GX_C EXCLUDE REGEX ".*/osd_.*\\.c$")
+list(FILTER GX_H EXCLUDE REGEX ".*/gx/osd\\.h$")
+
+set(SDL_H "${GX_ROOT}/sdl/osd.h")
 
 # --- EXCLUDE third-party examples/tests/docs ---
 
@@ -29,11 +31,10 @@ list(FILTER CORE_C EXCLUDE REGEX ".*/zstd-[^/]*/doc/.*")
 list(FILTER CORE_C EXCLUDE REGEX ".*/zlib-[^/]*/examples?/.*")
 list(FILTER CORE_C EXCLUDE REGEX ".*/zlib-[^/]*/test/.*")
 
-# generic safety net (на будущее)
+# generic safety net
 list(FILTER CORE_C EXCLUDE REGEX ".*/(test|tests|examples?|doc)/.*")
 
-message(STATUS "CORE_C count = ${CORE_C}")
-message(STATUS "GX_C count   = ${GX_C}")
+find_package(SDL3 CONFIG REQUIRED)  
 
 add_executable (smd_dgx_cmake)
 
@@ -65,6 +66,8 @@ target_include_directories(smd_dgx_cmake PRIVATE
   "${GX_ROOT}/core/cd_hw/libchdr/deps/zstd-1.5.6/lib"
   "${GX_ROOT}/core/cd_hw/libchdr/deps/zstd-1.5.6/lib/common"
 )
+
+target_link_libraries(smd_dgx_cmake PRIVATE SDL3::SDL3)
 
 target_compile_definitions(smd_dgx_cmake PRIVATE
   LSB_FIRST
@@ -99,3 +102,5 @@ source_group(TREE "${GX_ROOT}/core" PREFIX "src\\core"      FILES ${CORE_C})
 source_group(TREE "${GX_ROOT}/core" PREFIX "includes\\core" FILES ${CORE_H})
 source_group(TREE "${GX_ROOT}/gx"   PREFIX "src"            FILES ${GX_C})
 source_group(TREE "${GX_ROOT}/gx"   PREFIX "includes"       FILES ${GX_H})
+
+source_group(TREE "${GX_ROOT}/sdl"  PREFIX "includes\\sdl" FILES ${SDL_H})
