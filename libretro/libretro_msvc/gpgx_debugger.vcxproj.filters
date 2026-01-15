@@ -557,6 +557,9 @@
     <ClInclude Include="..\..\core\input_hw\paddle.h">
       <Filter>core\input_hw</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\core\input_hw\smash.h">
+      <Filter>core\input_hw</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\core\input_hw\sportspad.h">
       <Filter>core\input_hw</Filter>
     </ClInclude>
