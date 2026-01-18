@@ -17,13 +17,25 @@ function(gx_add_core target GX_ROOT)
     list(APPEND GENPLUS_SRC_DIR "${GX_ROOT}/core/debug")
   endif()
 
+  set(CORE_HEADERS "")
+  file(GLOB_RECURSE CORE_HEADERS
+    CONFIGURE_DEPENDS
+    "${GX_ROOT}/core/*.h"
+  )
+
   set(CORE_SOURCES "")
   foreach(dir IN LISTS GENPLUS_SRC_DIR)
     file(GLOB dir_sources CONFIGURE_DEPENDS "${dir}/*.c")
     list(APPEND CORE_SOURCES ${dir_sources})
   endforeach()
 
-  add_library(${target} STATIC ${CORE_SOURCES})
+  set(CORE_INLINE_HEADERS "")
+  file(GLOB_RECURSE CORE_INLINE_HEADERS
+    CONFIGURE_DEPENDS
+    "${GX_ROOT}/core/m68k/*.h"
+  )
+
+  add_library(${target} STATIC ${CORE_INLINE_HEADERS} ${CORE_SOURCES})
 
   target_compile_definitions(${target} PUBLIC
     _CRT_SECURE_NO_WARNINGS
@@ -32,13 +44,18 @@ function(gx_add_core target GX_ROOT)
     MAXROMSIZE=33554432
     HAVE_YM3438_CORE
     Z7_ST
-    ZSTD_DISABLE_ASM
-    INLINE=static inline
+    _7ZIP_ST
+    FLAC__NO_DLL
+    FLAC__HAS_OGG=0
     $<$<BOOL:${GX_HOOK_CPU}>:HOOK_CPU>
     $<$<AND:$<BOOL:${GX_ENABLE_CHD}>,$<PLATFORM_ID:Windows>>:HAVE_FSEEKO>
   )
 
-  target_include_directories(${target} PUBLIC
-    ${GENPLUS_SRC_DIR}
-  )
+  target_compile_definitions(${target} PRIVATE INLINE=static inline)
+
+  target_include_directories(${target} PUBLIC ${GENPLUS_SRC_DIR})
+
+  source_group(TREE "${GX_ROOT}/core" PREFIX "src\\core"      FILES ${CORE_SOURCES})
+  source_group(TREE "${GX_ROOT}/core" PREFIX "includes\\core" FILES ${CORE_HEADERS})
+
 endfunction()

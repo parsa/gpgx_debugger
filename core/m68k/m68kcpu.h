@@ -49,6 +49,7 @@
 /* Different ways to stop the CPU */
 #define STOP_LEVEL_STOP 1
 #define STOP_LEVEL_HALT 2
+#define STOP_LEVEL_WAIT 4
 
 /* Used for 68000 address error processing */
 #if M68K_EMULATE_ADDRESS_ERROR
@@ -876,7 +877,7 @@ INLINE uint m68ki_read_8(uint address)
   if (UNLIKELY(cpu_hook))
     cpu_hook(HOOK_M68K_R, 1, address, val);
 #endif
-  check_breakpoint(BPT_M68K_R, 1, address, val);
+  // check_breakpoint(BPT_M68K_R, 1, address, val);
 
   return val;
 }
@@ -897,7 +898,7 @@ INLINE uint m68ki_read_16(uint address)
   if (UNLIKELY(cpu_hook))
     cpu_hook(HOOK_M68K_R, 2, address, val);
 #endif
-  check_breakpoint(BPT_M68K_R, 2, address, val);
+  // check_breakpoint(BPT_M68K_R, 2, address, val);
 
   return val;
 }
@@ -922,7 +923,7 @@ INLINE uint m68ki_read_32(uint address)
   if (UNLIKELY(cpu_hook))
     cpu_hook(HOOK_M68K_R, 4, address, val);
 #endif
-  check_breakpoint(BPT_M68K_R, 4, address, val);
+  // check_breakpoint(BPT_M68K_R, 4, address, val);
 
   return val;
 }
@@ -933,7 +934,7 @@ INLINE void m68ki_write_8(uint address, uint value)
 
   m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_DATA); /* auto-disable (see m68kcpu.h) */
 
-  check_breakpoint(BPT_M68K_W, 1, address, value);
+  // check_breakpoint(BPT_M68K_W, 1, address, value);
 
   temp = &m68ki_cpu.memory_map[((address)>>16)&0xff];
   if (temp->write8) (*temp->write8)(ADDRESS_68K(address),value);
@@ -951,7 +952,7 @@ INLINE void m68ki_write_16(uint address, uint value)
   if (UNLIKELY(cpu_hook))
     cpu_hook(HOOK_M68K_W, 2, address, value);
 #endif
-  check_breakpoint(BPT_M68K_W, 2, address, value);
+  // check_breakpoint(BPT_M68K_W, 2, address, value);
 
   temp = &m68ki_cpu.memory_map[((address)>>16)&0xff];
   if (temp->write16) (*temp->write16)(ADDRESS_68K(address),value);
@@ -965,7 +966,7 @@ INLINE void m68ki_write_32(uint address, uint value)
   m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_DATA); /* auto-disable (see m68kcpu.h) */
   m68ki_check_address_error(address, MODE_WRITE, FLAG_S | FUNCTION_CODE_USER_DATA); /* auto-disable (see m68kcpu.h) */
 
-  check_breakpoint(BPT_M68K_W, 4, address, value);
+  // check_breakpoint(BPT_M68K_W, 4, address, value);
 
   temp = &m68ki_cpu.memory_map[((address)>>16)&0xff];
   if (temp->write16) (*temp->write16)(ADDRESS_68K(address),value>>16);

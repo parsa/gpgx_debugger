@@ -40,11 +40,9 @@
  ****************************************************************************************/
 
 #include "shared.h"
-#include "yx5200.h"
 #include "eq.h"
 
 /* Global variables */
-config_t config;
 t_bitmap bitmap;
 t_snd snd;
 uint32 mcycles_vdp;
@@ -149,7 +147,7 @@ void audio_set_rate(int samplerate, double framerate)
   if (snd.blips[3])
   {
     /* initialize YX5200 audio */
-    yx5200_init(samplerate);
+    // yx5200_init(samplerate);
   }
 
   /* Reinitialize internal rates */
@@ -224,7 +222,7 @@ int audio_update(int16 *buffer)
   if (snd.blips[3])
   {
     /* read YX5200 audio samples */
-    yx5200_update(size);
+    // yx5200_update(size);
 
     /* add cartridge audio stream for audio mixing */
     mixed_blips++;

@@ -45,7 +45,6 @@
 #include "eeprom_i2c.h"
 #include "eeprom_spi.h"
 #include "flash_cfi.h"
-#include "yx5200.h"
 #include "megasd.h"
 
 /* Cart database entry */
@@ -696,15 +695,15 @@ void md_cart_init(void)
     /* KAISER WAVE board !TIME handler */ 
     cart.hw.time_w = mapper_kaiserwave_w;
 
-    /* enable YX5200 hardware */
-    cart.special |= HW_YX5200;
+    ///* enable YX5200 hardware */
+    //cart.special |= HW_YX5200;
 
-    /* allocate & clear blip buffer for YX5200 audio stream */
-    snd.blips[3] = blip_new(snd.sample_rate / 10);
-    if (snd.blips[3]) blip_clear(snd.blips[3]);
+    ///* allocate & clear blip buffer for YX5200 audio stream */
+    //snd.blips[3] = blip_new(snd.sample_rate / 10);
+    //if (snd.blips[3]) blip_clear(snd.blips[3]);
 
-    /* initialize YX5200 audio */
-    yx5200_init(snd.sample_rate);
+    ///* initialize YX5200 audio */
+    //yx5200_init(snd.sample_rate);
 
     /* initialize CFI flash memory hardware */
     flash_cfi_init(S29GL064N_04, NULL);
@@ -1031,11 +1030,11 @@ void md_cart_reset(int hard_reset)
     megasd_reset();
   }
 
-  /* YX5200 hardware */
-  if (cart.special & HW_YX5200)
-  {
-    yx5200_reset();
-  }
+  ///* YX5200 hardware */
+  //if (cart.special & HW_YX5200)
+  //{
+  //  yx5200_reset();
+  //}
 
   /* SVP chip */
   if (svp)
@@ -1130,11 +1129,11 @@ int md_cart_context_save(uint8 *state)
     bufferptr += flash_cfi_context_save(&state[bufferptr]);
   }
 
-  /* YX5200 hardware */
-  if (cart.special & HW_YX5200)
-  {
-    bufferptr += yx5200_context_save(&state[bufferptr]);
-  }
+  ///* YX5200 hardware */
+  //if (cart.special & HW_YX5200)
+  //{
+  //  bufferptr += yx5200_context_save(&state[bufferptr]);
+  //}
 
   return bufferptr;
 }
@@ -1204,11 +1203,11 @@ int md_cart_context_load(uint8 *state)
     bufferptr += flash_cfi_context_load(&state[bufferptr]);
   }
 
-  /* YX5200 hardware */
-  if (cart.special & HW_YX5200)
-  {
-    bufferptr += yx5200_context_load(&state[bufferptr]);
-  }
+  ///* YX5200 hardware */
+  //if (cart.special & HW_YX5200)
+  //{
+  //  bufferptr += yx5200_context_load(&state[bufferptr]);
+  //}
 
   return bufferptr;
 }
@@ -1712,7 +1711,7 @@ static void mapper_kaiserwave_w(uint32 address, uint32 data)
   if (!(address & 1))
   {
     /* YX5200 RX input line is mapped to D0 */
-    yx5200_write(data & 0x01);
+    // yx5200_write(data & 0x01);
   }
   else
   {
