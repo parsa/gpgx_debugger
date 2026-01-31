@@ -54,6 +54,7 @@ function(gx_add_core target GX_ROOT)
   target_compile_definitions(${target} PRIVATE INLINE=static inline)
 
   target_include_directories(${target} PUBLIC ${GENPLUS_SRC_DIR})
+  target_include_directories(${target} PRIVATE "${GX_ROOT}/core/sound/minimp3")
 
   source_group(TREE "${GX_ROOT}/core" PREFIX "src\\core"      FILES ${CORE_SOURCES})
   source_group(TREE "${GX_ROOT}/core" PREFIX "includes\\core" FILES ${CORE_HEADERS})

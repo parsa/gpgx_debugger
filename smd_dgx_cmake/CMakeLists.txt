@@ -8,14 +8,15 @@ endif()
 
 project ("smd_dgx" LANGUAGES C CXX)
 
-set(GX_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
+set(SMD_IDA_ROOT "${CMAKE_CURRENT_LIST_DIR}/../smd_ida_tools2")
+set(GX_ROOT "${CMAKE_CURRENT_LIST_DIR}/../Genesis-Plus-GX")
 
 include(cmake/gx_options.cmake)
 include(cmake/gx_core.cmake)
 include(cmake/gx_libchdr.cmake)
 
 add_library(gx_platform INTERFACE)
-target_include_directories(gx_platform INTERFACE "frontends/sdl")
+target_include_directories(gx_platform INTERFACE "frontends/sdl" "frontends/core")
 
 gx_add_core(gx_core "${GX_ROOT}")
 
@@ -29,21 +30,51 @@ if (GX_ENABLE_CHD)
   target_link_libraries(gx_core PUBLIC gx_libchdr)
 endif()
 
-find_package(SDL3 CONFIG REQUIRED)
+find_package(Protobuf CONFIG REQUIRED)
+find_package(gRPC CONFIG REQUIRED)
+
+set(PROTO_SRC_DIR "${SMD_IDA_ROOT}/proto")
+
+set(PROTO_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
+file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
+
+file(GLOB PROTO_FILES ${PROTO_SRC_DIR}/*.proto)
+list(FILTER PROTO_FILES EXCLUDE REGEX "z80")
+
+add_library(debug_lib STATIC)
+target_sources(debug_lib PRIVATE ${PROTO_FILES})
+
+target_link_libraries(debug_lib PUBLIC protobuf::libprotobuf gRPC::grpc)
+target_include_directories(debug_lib PUBLIC "$<BUILD_INTERFACE:${PROTO_GEN_DIR}>")
+
+protobuf_generate(
+    TARGET debug_lib
+	LANGUAGE cpp
+    IMPORT_DIRS "${PROTO_SRC_DIR}"
+    PROTOC_OUT_DIR "${PROTO_GEN_DIR}")
+
+protobuf_generate(
+    TARGET          debug_lib
+    LANGUAGE        grpc
+    IMPORT_DIRS     "${PROTO_SRC_DIR}"
+    PROTOC_OUT_DIR  "${PROTO_GEN_DIR}"
+    GENERATE_EXTENSIONS .grpc.pb.h .grpc.pb.cc
+    PLUGIN          "protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>"
+) 
+
+find_package(OpenGL REQUIRED)
+find_package(SDL2 CONFIG REQUIRED)
+find_package(imgui CONFIG REQUIRED)
 
 set(GX_PLATFORM_ROOT "${CMAKE_CURRENT_LIST_DIR}/frontends/sdl")
 add_library(gx_platform_lib "${GX_PLATFORM_ROOT}/sdl.c" "${GX_PLATFORM_ROOT}/config.c" "${GX_PLATFORM_ROOT}/error.c" "${GX_PLATFORM_ROOT}/fileio.c" "${GX_PLATFORM_ROOT}/unzip.c")
 target_link_libraries(gx_platform_lib PRIVATE gx_core)
 
 add_executable(smd_dgx_cmake)
-target_sources(smd_dgx_cmake PRIVATE "frontends/sdl/osd.h" "frontends/sdl/main_sdl.cpp")
+target_sources(smd_dgx_cmake PRIVATE "frontends/sdl/osd.h" "frontends/sdl/main_sdl2.cpp")
 
-target_link_libraries(smd_dgx_cmake PRIVATE gx_core gx_platform_lib SDL3::SDL3)
+target_link_libraries(smd_dgx_cmake PRIVATE gx_core gx_platform_lib debug_lib SDL2::SDL2 OpenGL::GL imgui::imgui)
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)
-  set_property(TARGET smd_dgx_cmake PROPERTY CXX_STANDARD 20)
-  set_target_properties(smd_dgx_cmake PROPERTIES
-	CXX_STANDARD 20
-	CXX_STANDARD_REQUIRED YES
-	)
+  set_target_properties(smd_dgx_cmake PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
 endif()

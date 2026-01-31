@@ -1,7 +1,8 @@
 #include "config.h"
 
 #include <input.h>
-#include <debug.h>
+// #include <debug.h>
+#include <setjmp.h>
 #include <ym2612.h>
 
 #include "md_ntsc.h"
