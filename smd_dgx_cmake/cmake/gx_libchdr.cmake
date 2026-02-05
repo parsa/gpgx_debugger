@@ -25,8 +25,7 @@ function(gx_add_libchdr target GX_ROOT)
     "${CHDLIBDIR}/deps/zstd-1.5.6/lib/common/error_private.c"
     "${CHDLIBDIR}/deps/zstd-1.5.6/lib/common/fse_decompress.c"
     "${CHDLIBDIR}/deps/zstd-1.5.6/lib/common/xxhash.c"
-    "${CHDLIBDIR}/deps/zstd-1.5.6/lib/common/zstd_common.c"
-  )
+    "${CHDLIBDIR}/deps/zstd-1.5.6/lib/common/zstd_common.c")
 
   target_include_directories(${target} PUBLIC
     "${CHDLIBDIR}/include"

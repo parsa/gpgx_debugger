@@ -41,26 +41,33 @@ file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
 file(GLOB PROTO_FILES ${PROTO_SRC_DIR}/*.proto)
 list(FILTER PROTO_FILES EXCLUDE REGEX "z80")
 
-add_library(debug_lib STATIC)
-target_sources(debug_lib PRIVATE ${PROTO_FILES})
+add_library(debug_proto_lib STATIC)
+target_sources(debug_proto_lib PRIVATE ${PROTO_FILES})
 
-target_link_libraries(debug_lib PUBLIC protobuf::libprotobuf gRPC::grpc)
-target_include_directories(debug_lib PUBLIC "$<BUILD_INTERFACE:${PROTO_GEN_DIR}>")
+target_link_libraries(debug_proto_lib PUBLIC protobuf::libprotobuf gRPC::grpc)
+target_include_directories(debug_proto_lib PUBLIC "$<BUILD_INTERFACE:${PROTO_GEN_DIR}>")
 
 protobuf_generate(
-    TARGET debug_lib
+    TARGET debug_proto_lib
 	LANGUAGE cpp
     IMPORT_DIRS "${PROTO_SRC_DIR}"
     PROTOC_OUT_DIR "${PROTO_GEN_DIR}")
 
 protobuf_generate(
-    TARGET          debug_lib
+    TARGET          debug_proto_lib
     LANGUAGE        grpc
     IMPORT_DIRS     "${PROTO_SRC_DIR}"
     PROTOC_OUT_DIR  "${PROTO_GEN_DIR}"
     GENERATE_EXTENSIONS .grpc.pb.h .grpc.pb.cc
     PLUGIN          "protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>"
-) 
+)
+
+add_library(debug_lib STATIC)
+target_sources(debug_lib PRIVATE "debugger/debugger.cpp")
+
+target_compile_definitions(debug_lib PRIVATE $<$<BOOL:${DEBUG_68K}>:DEBUG_68K>)
+
+target_link_libraries(debug_lib PRIVATE debug_proto_lib)
 
 find_package(OpenGL REQUIRED)
 find_package(SDL2 CONFIG REQUIRED)
@@ -77,4 +84,5 @@ target_link_libraries(smd_dgx_cmake PRIVATE gx_core gx_platform_lib debug_lib SD
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)
   set_target_properties(smd_dgx_cmake PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
+  set_target_properties(debug_lib PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
 endif()

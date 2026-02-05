@@ -49,6 +49,7 @@ function(gx_add_core target GX_ROOT)
     FLAC__HAS_OGG=0
     $<$<BOOL:${GX_HOOK_CPU}>:HOOK_CPU>
     $<$<AND:$<BOOL:${GX_ENABLE_CHD}>,$<PLATFORM_ID:Windows>>:HAVE_FSEEKO>
+    $<$<BOOL:${DEBUG_68K}>:DEBUG_68K>
   )
 
   target_compile_definitions(${target} PRIVATE INLINE=static inline)
