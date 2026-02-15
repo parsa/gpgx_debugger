@@ -3,6 +3,7 @@
 
 #include "save_state.hpp"
 
+
 extern "C"
 {
 #include "sms_ntsc.h"

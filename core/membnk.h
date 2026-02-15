@@ -65,8 +65,4 @@ typedef t_zbank_memory_map _zbank_memory_map;
 }
 #endif
 
-#ifdef __cplusplus
-}
-#endif
-
 #endif /* _MEMBNK_H_ */

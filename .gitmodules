@@ -1,6 +1,0 @@
-[submodule "Genesis-Plus-GX"]
-	path = Genesis-Plus-GX
-	url = https://github.com/ekeeke/Genesis-Plus-GX
-[submodule "smd_ida_tools2"]
-	path = smd_ida_tools2
-	url = https://github.com/lab313ru/smd_ida_tools2
