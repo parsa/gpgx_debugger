@@ -93,6 +93,13 @@ static struct
 
 static void psg_update(unsigned int clocks);
 
+#ifdef HOOK_CPU
+const int *psg_debug_regs(void)
+{
+  return psg.regs;
+}
+#endif
+
 void psg_init(PSG_TYPE type)
 {
   int i;

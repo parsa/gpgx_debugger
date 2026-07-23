@@ -18,6 +18,10 @@ extern void m68k_instr_callback();
 
 #include "m68kconf.h"
 #include "m68kcpu.h"
+
+#ifdef HOOK_CPU
+#include "../debug/cpuhook.h"
+#endif
 #include "m68kops.h"
 
 /* ======================================================================== */
@@ -274,7 +278,10 @@ void m68k_set_irq_delay(unsigned int int_level)
 
 void m68k_instr_callback()
 {
-    //process_debug();
+#ifdef HOOK_CPU
+    if (cpu_hook)
+        cpu_hook(HOOK_M68K_E, 0, REG_PC, 0);
+#endif
 }
 
 void m68k_run(unsigned int cycles) 
