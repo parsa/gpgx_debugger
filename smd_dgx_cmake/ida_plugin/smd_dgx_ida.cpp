@@ -1,0 +1,690 @@
+// SMD DGX — IDA 9.2+ debugger plugin hosting the Genesis Plus GX emulator
+// in-process (static link, emulator on its own thread).
+//
+// This is the phase-2 port of Gensida's ida_debug.cpp: the debugger_t /
+// HT_IDD surface is kept 1:1, but every gRPC client call is replaced by a
+// direct call into EmuHost/IDebugBackend (valid while the emulation thread is
+// paused) and events arrive through EmuHost's EventSink instead of a gRPC
+// server.
+//
+// Marked VERIFY-9.3 where the API must be checked against the 9.3 SDK once it
+// is installed (written against the 9.x idd.hpp surface Gensida used).
+
+#include <deque>
+#include <map>
+#include <mutex>
+#include <string>
+
+// IDA SDK
+#include <ida.hpp>
+#include <idp.hpp>
+#include <idd.hpp>
+#include <dbg.hpp>
+#include <auto.hpp>
+#include <loader.hpp>
+#include <segment.hpp>
+
+// emulator (NO Qt here)
+#include "debugger/EmuHost.h"
+
+#include "ida_registers.h"
+
+#define PLUGIN_NAME "SMD DGX"
+#define BREAKPOINTS_BASE 0x00D00000u   // VDP pseudo-segments: VRAM +0x00000, CRAM +0x10000, VSRAM +0x20000
+
+// ---------------------------------------------------------------------------
+// Event queue (Gensida's eventlist_t + a mutex; events are produced on the
+// emulation thread and drained by IDA's debthread via ev_get_debug_event)
+// ---------------------------------------------------------------------------
+namespace {
+
+struct EventList {
+    std::mutex mx;
+    std::deque<debug_event_t> q;
+
+    void enqueue(const debug_event_t& ev) {
+        std::lock_guard<std::mutex> lk(mx);
+        q.push_back(ev);
+    }
+    bool retrieve(debug_event_t* out, bool* more) {
+        std::lock_guard<std::mutex> lk(mx);
+        if (q.empty()) return false;
+        *out = q.front();
+        q.pop_front();
+        *more = !q.empty();
+        return true;
+    }
+};
+
+EventList g_events;
+EmuHost*  g_host = nullptr;
+
+// breakpoint identity (type,start,end,is_vdp) -> backend id, needed because
+// IDebugBackend deletes by id while IDA deletes by address/type
+struct BpKey {
+    uint8_t type; uint8_t vdp; uint32_t start; uint32_t end;
+    bool operator<(const BpKey& o) const {
+        return std::tie(type, vdp, start, end) < std::tie(o.type, o.vdp, o.start, o.end);
+    }
+};
+std::map<BpKey, int> g_bpIds;
+
+// ---------------------------------------------------------------------------
+// codemap -> auto_make_code on the main thread
+// ---------------------------------------------------------------------------
+struct apply_codemap_req : public exec_request_t {
+    std::map<uint32_t, uint32_t> changed;
+    explicit apply_codemap_req(std::map<uint32_t, uint32_t> c) : changed(std::move(c)) {}
+    ssize_t idaapi execute() override {
+        for (const auto& kv : changed) {
+            auto_make_code((ea_t)kv.first);
+            plan_ea((ea_t)kv.first);
+        }
+        return 0;
+    }
+};
+
+void apply_codemap(std::map<uint32_t, uint32_t> changed)
+{
+    if (changed.empty()) return;
+    apply_codemap_req req(std::move(changed));
+    execute_sync(req, MFF_WRITE);
+}
+
+// ---------------------------------------------------------------------------
+// EmuHost event -> IDA debug_event_t
+// ---------------------------------------------------------------------------
+void on_emu_event(const DebugEvent& ev)
+{
+    debug_event_t ida_ev;               // VERIFY-9.3: field/ctor surface
+    ida_ev.pid = 1;
+    ida_ev.tid = 1;
+    ida_ev.handled = true;
+
+    switch (ev.type) {
+    case DebugEvent::Type::Started: {
+        modinfo_t& mi = ida_ev.set_modinfo(PROCESS_STARTED);   // VERIFY-9.3
+        ida_ev.ea = BADADDR;
+        mi.name = "GPGX";
+        mi.base = 0;
+        mi.size = 0;
+        mi.rebase_to = BADADDR;
+        g_events.enqueue(ida_ev);
+
+        // initial pause right after start, like Gensida
+        debug_event_t sus = ida_ev;
+        sus.set_eid(PROCESS_SUSPENDED);                        // VERIFY-9.3
+        sus.ea = ev.pc;
+        g_events.enqueue(sus);
+        break;
+    }
+    case DebugEvent::Type::Paused:
+        apply_codemap(ev.changed);
+        ida_ev.set_eid(PROCESS_SUSPENDED);
+        ida_ev.ea = ev.pc;
+        g_events.enqueue(ida_ev);
+        break;
+    case DebugEvent::Type::Stopped:
+        apply_codemap(ev.changed);
+        ida_ev.set_exit_code(PROCESS_EXITED, 0);               // VERIFY-9.3
+        ida_ev.ea = BADADDR;
+        g_events.enqueue(ida_ev);
+        break;
+    case DebugEvent::Type::Resumed:
+        break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// memory routing: side-effect-free reads via typed regions
+// (never touches IO read handlers; unmapped bytes read as 0, like Gens)
+// ---------------------------------------------------------------------------
+ssize_t region_rw(ea_t ea, void* buf, size_t size, bool write)
+{
+    if (!g_host) return 0;
+    IDebugBackend* be = g_host->backend();
+    uint8_t* p = (uint8_t*)buf;
+
+    // ROM size from the region table
+    static uint32_t romSize = 0;
+    if (!romSize)
+        for (const auto& r : be->getMemRegions())
+            if (r.id == 0) romSize = r.size;
+
+    for (size_t i = 0; i < size; ++i) {
+        uint32_t a = (uint32_t)(ea + i);
+        int region = -1; uint32_t off = 0;
+        if (a < romSize)                                { region = 0; off = a; }
+        else if (a >= 0xFF0000 && a <= 0xFFFFFF)        { region = 1; off = a - 0xFF0000; }
+        else if (a >= 0xA00000 && a <  0xA02000)        { region = 2; off = a - 0xA00000; }
+        else if (a >= BREAKPOINTS_BASE && a < BREAKPOINTS_BASE + 0x10000)
+                                                        { region = 3; off = a - BREAKPOINTS_BASE; }
+        else if (a >= BREAKPOINTS_BASE + 0x10000 && a < BREAKPOINTS_BASE + 0x20000)
+                                                        { region = 4; off = a - BREAKPOINTS_BASE - 0x10000; }
+        else if (a >= BREAKPOINTS_BASE + 0x20000 && a < BREAKPOINTS_BASE + 0x30000)
+                                                        { region = 5; off = a - BREAKPOINTS_BASE - 0x20000; }
+
+        if (region < 0) { if (!write) p[i] = 0; continue; }
+        if (write) {
+            be->writeRegion(region, off, &p[i], 1);
+        } else {
+            auto b = be->readRegion(region, off, 1);
+            p[i] = b.empty() ? 0 : b[0];
+        }
+    }
+    return (ssize_t)size;
+}
+
+// ---------------------------------------------------------------------------
+// registers
+// ---------------------------------------------------------------------------
+const char* const SRReg[] = {
+    "C", "V", "Z", "N", "X", nullptr, nullptr, nullptr,
+    "I", "I", "I", nullptr, nullptr, "S", nullptr, "T",
+};
+
+register_info_t registers[] = {
+    { "D0", REGISTER_ADDRESS, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "D1", REGISTER_ADDRESS, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "D2", REGISTER_ADDRESS, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "D3", REGISTER_ADDRESS, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "D4", REGISTER_ADDRESS, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "D5", REGISTER_ADDRESS, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "D6", REGISTER_ADDRESS, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "D7", REGISTER_ADDRESS, RC_GENERAL, dt_dword, nullptr, 0 },
+
+    { "A0", 0, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "A0_ADDR", REGISTER_ADDRESS | REGISTER_READONLY, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "A1", 0, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "A1_ADDR", REGISTER_ADDRESS | REGISTER_READONLY, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "A2", 0, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "A2_ADDR", REGISTER_ADDRESS | REGISTER_READONLY, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "A3", 0, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "A3_ADDR", REGISTER_ADDRESS | REGISTER_READONLY, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "A4", 0, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "A4_ADDR", REGISTER_ADDRESS | REGISTER_READONLY, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "A5", 0, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "A5_ADDR", REGISTER_ADDRESS | REGISTER_READONLY, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "A6", 0, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "A6_ADDR", REGISTER_ADDRESS | REGISTER_READONLY, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "A7", 0, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "A7_ADDR", REGISTER_ADDRESS | REGISTER_READONLY, RC_GENERAL, dt_dword, nullptr, 0 },
+
+    { "PC", REGISTER_ADDRESS | REGISTER_IP | REGISTER_READONLY, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "SP", REGISTER_ADDRESS | REGISTER_SP, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "SR", 0, RC_GENERAL, dt_word, SRReg, 0xFFFF },
+
+    { "DMA_LEN", REGISTER_READONLY, RC_GENERAL, dt_word, nullptr, 0 },
+    { "DMA_SRC", REGISTER_ADDRESS | REGISTER_READONLY, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "VDP_DST", REGISTER_ADDRESS | REGISTER_READONLY, RC_GENERAL, dt_dword, nullptr, 0 },
+
+    { "Set1",   0, RC_VDP, dt_byte, nullptr, 0 },
+    { "Set2",   0, RC_VDP, dt_byte, nullptr, 0 },
+    { "PlaneA", 0, RC_VDP, dt_byte, nullptr, 0 },
+    { "Window", 0, RC_VDP, dt_byte, nullptr, 0 },
+    { "PlaneB", 0, RC_VDP, dt_byte, nullptr, 0 },
+    { "Sprite", 0, RC_VDP, dt_byte, nullptr, 0 },
+    { "Reg6",   0, RC_VDP, dt_byte, nullptr, 0 },
+    { "BgClr",  0, RC_VDP, dt_byte, nullptr, 0 },
+    { "Reg8",   0, RC_VDP, dt_byte, nullptr, 0 },
+    { "Reg9",   0, RC_VDP, dt_byte, nullptr, 0 },
+    { "HInt",   0, RC_VDP, dt_byte, nullptr, 0 },
+    { "Set3",   0, RC_VDP, dt_byte, nullptr, 0 },
+    { "Set4",   0, RC_VDP, dt_byte, nullptr, 0 },
+    { "HScrl",  0, RC_VDP, dt_byte, nullptr, 0 },
+    { "Reg14",  0, RC_VDP, dt_byte, nullptr, 0 },
+    { "WrInc",  0, RC_VDP, dt_byte, nullptr, 0 },
+    { "ScrSz",  0, RC_VDP, dt_byte, nullptr, 0 },
+    { "WinX",   0, RC_VDP, dt_byte, nullptr, 0 },
+    { "WinY",   0, RC_VDP, dt_byte, nullptr, 0 },
+    { "LenLo",  0, RC_VDP, dt_byte, nullptr, 0 },
+    { "LenHi",  0, RC_VDP, dt_byte, nullptr, 0 },
+    { "SrcLo",  0, RC_VDP, dt_byte, nullptr, 0 },
+    { "SrcMid", 0, RC_VDP, dt_byte, nullptr, 0 },
+    { "SrcHi",  0, RC_VDP, dt_byte, nullptr, 0 },
+};
+
+const char* register_classes[] = {
+    "General Registers",
+    "VDP Registers",
+    nullptr,
+};
+
+drc_t read_registers(int clsmask, regval_t* values)
+{
+    if (!g_host) return DRC_FAILED;
+    IDebugBackend* be = g_host->backend();
+
+    if (clsmask & RC_GENERAL) {
+        M68kRegs r = be->getM68kRegs();
+        for (int i = 0; i < 8; ++i) values[R_D0 + i].ival = r.d[i];
+        for (int i = 0; i < 8; ++i) {
+            values[R_A0 + i * 2].ival     = r.a[i];
+            values[R_A0_ADDR + i * 2].ival = r.a[i] & 0xFFFFFF;
+        }
+        values[R_PC].ival = r.pc & 0xFFFFFF;
+        values[R_SP].ival = r.a[7] & 0xFFFFFF;
+        values[R_SR].ival = r.sr;
+
+        VdpState v = be->getVdpState();
+        values[R_VDP_DMA_LEN].ival = v.dma_len;
+        values[R_VDP_DMA_SRC].ival = (v.dma_src << 1) & 0xFFFFFF;
+        values[R_VDP_WRITE_ADDR].ival = BREAKPOINTS_BASE;  // TODO: expose VDP addr latch (Ctrl.Address) for exact dst
+    }
+    if (clsmask & RC_VDP) {
+        VdpState v = be->getVdpState();
+        for (int i = 0; i < 24; ++i)
+            values[R_V00 + i].ival = v.reg[i];
+    }
+    return DRC_OK;
+}
+
+drc_t write_register(int regidx, const regval_t* value)
+{
+    if (!g_host) return DRC_FAILED;
+    IDebugBackend* be = g_host->backend();
+
+    if (regidx >= R_D0 && regidx <= R_SR) {
+        M68kRegs r = be->getM68kRegs();
+        if (regidx <= R_D7)          r.d[regidx - R_D0] = (uint32_t)value->ival;
+        else if (regidx < R_PC && ((regidx - R_A0) % 2) == 0)
+                                     r.a[(regidx - R_A0) / 2] = (uint32_t)value->ival;
+        else if (regidx == R_SP)     r.a[7] = (uint32_t)value->ival;
+        else if (regidx == R_SR)     r.sr = (uint32_t)value->ival;
+        else return DRC_OK;          // PC/ADDR pseudo-regs are read-only
+        be->setM68kRegs(r);
+        return DRC_OK;
+    }
+    if (regidx >= R_V00 && regidx <= R_V23) {
+        be->setVdpReg(regidx - R_V00, (uint8_t)(value->ival & 0xFF));
+        return DRC_OK;
+    }
+    return DRC_OK;
+}
+
+// ---------------------------------------------------------------------------
+// breakpoints
+// ---------------------------------------------------------------------------
+void translate_bpt(ea_t ea, int size, bpttype_t itype,
+                   uint8_t& t1, uint8_t& t2, uint8_t& vdp, uint32_t& start, uint32_t& end)
+{
+    start = (uint32_t)ea;
+    end   = (uint32_t)(ea + (size ? size : 1) - 1);
+    t2 = 0; vdp = 0;
+    switch (itype) {
+    case BPT_EXEC:  t1 = (uint8_t)BpType::PC;    break;
+    case BPT_READ:  t1 = (uint8_t)BpType::Read;  break;
+    case BPT_WRITE: t1 = (uint8_t)BpType::Write; break;
+    case BPT_RDWR:  t1 = (uint8_t)BpType::Read; t2 = (uint8_t)BpType::Write; break;
+    default:        t1 = (uint8_t)BpType::PC;    break;
+    }
+    if (start >= BREAKPOINTS_BASE && end < BREAKPOINTS_BASE + 0x30000) {
+        start -= BREAKPOINTS_BASE;
+        end   -= BREAKPOINTS_BASE;
+        vdp = 1;
+    }
+    start &= 0xFFFFFF;
+    end   &= 0xFFFFFF;
+}
+
+void add_one_bpt(uint8_t type, uint8_t vdp, uint32_t start, uint32_t end)
+{
+    Breakpoint bp;
+    bp.type   = (BpType)type;
+    bp.is_vdp = vdp != 0;
+    bp.start  = start;
+    bp.end    = end;
+    int id = g_host->backend()->addBreakpoint(bp);
+    g_bpIds[BpKey{type, vdp, start, end}] = id;
+}
+
+void del_one_bpt(uint8_t type, uint8_t vdp, uint32_t start, uint32_t end)
+{
+    auto it = g_bpIds.find(BpKey{type, vdp, start, end});
+    if (it != g_bpIds.end()) {
+        g_host->backend()->removeBreakpoint(it->second);
+        g_bpIds.erase(it);
+    }
+}
+
+drc_t update_bpts(int* nbpts, update_bpt_info_t* bpts, int nadd, int ndel)
+{
+    if (!g_host) return DRC_FAILED;
+    int ok = 0;
+    for (int i = 0; i < nadd; ++i) {
+        if (bpts[i].code == BPT_SKIP) continue;
+        uint8_t t1, t2, vdp; uint32_t s, e;
+        translate_bpt(bpts[i].ea, (int)bpts[i].size, bpts[i].type, t1, t2, vdp, s, e);
+        add_one_bpt(t1, vdp, s, e);
+        if (t2) add_one_bpt(t2, vdp, s, e);
+        bpts[i].code = BPT_OK;
+        ++ok;
+    }
+    for (int i = 0; i < ndel; ++i) {
+        if (bpts[nadd + i].code == BPT_SKIP) continue;
+        uint8_t t1, t2, vdp; uint32_t s, e;
+        translate_bpt(bpts[nadd + i].ea, (int)bpts[nadd + i].size, bpts[nadd + i].type, t1, t2, vdp, s, e);
+        del_one_bpt(t1, vdp, s, e);
+        if (t2) del_one_bpt(t2, vdp, s, e);
+        bpts[nadd + i].code = BPT_OK;
+        ++ok;
+    }
+    *nbpts = ok;
+    return DRC_OK;
+}
+
+// ---------------------------------------------------------------------------
+// process lifecycle
+// ---------------------------------------------------------------------------
+drc_t start_process(const char* path, const char* input_path)
+{
+    delete g_host;
+    g_host = new EmuHost();
+    g_bpIds.clear();
+    { std::lock_guard<std::mutex> lk(g_events.mx); g_events.q.clear(); }
+
+    g_host->setEventSink(on_emu_event);
+
+    const char* rom = (input_path && input_path[0]) ? input_path : path;
+    if (!g_host->start(rom ? rom : "")) {
+        delete g_host;
+        g_host = nullptr;
+        return DRC_FAILED;
+    }
+    // start paused at the entry: request a pause right away
+    g_host->backend()->pause();
+    return DRC_OK;
+}
+
+// ---------------------------------------------------------------------------
+// HT_IDD callback — same dispatch table as Gensida
+// ---------------------------------------------------------------------------
+ssize_t idaapi debugger_callback(void*, int msgid, va_list va)
+{
+    drc_t retcode = DRC_NONE;
+
+    switch (msgid) {
+    case debugger_t::ev_init_debugger:
+    case debugger_t::ev_term_debugger:
+        retcode = DRC_OK;
+        break;
+
+    case debugger_t::ev_get_processes: {
+        procinfo_vec_t* procs = va_arg(va, procinfo_vec_t*);
+        process_info_t& pi = procs->push_back();   // VERIFY-9.3
+        pi.pid = 1;
+        pi.name = "GPGX";
+        retcode = DRC_OK;
+        break;
+    }
+
+    case debugger_t::ev_start_process: {
+        const char* path      = va_arg(va, const char*);
+        const char* args      = va_arg(va, const char*);      (void)args;
+        const char* startdir  = va_arg(va, const char*);      (void)startdir;
+        uint32 flags          = va_arg(va, uint32);           (void)flags;
+        const char* input     = va_arg(va, const char*);
+        uint32 crc            = va_arg(va, uint32);           (void)crc;
+        retcode = start_process(path, input);
+        break;
+    }
+
+    case debugger_t::ev_get_debapp_attrs: {
+        debapp_attrs_t* attrs = va_arg(va, debapp_attrs_t*);
+        attrs->addrsize = 4;
+        attrs->is_be = true;
+        attrs->platform = "sega_md";
+        attrs->cbsize = sizeof(debapp_attrs_t);
+        retcode = DRC_OK;
+        break;
+    }
+
+    case debugger_t::ev_request_pause:
+        if (g_host) g_host->backend()->pause();
+        retcode = DRC_OK;
+        break;
+
+    case debugger_t::ev_exit_process:
+        if (g_host) { g_host->stop(); }
+        retcode = DRC_OK;
+        break;
+
+    case debugger_t::ev_get_debug_event: {
+        gdecode_t* code = va_arg(va, gdecode_t*);
+        debug_event_t* event = va_arg(va, debug_event_t*);
+        bool more = false;
+        *code = g_events.retrieve(event, &more)
+                    ? (more ? GDE_MANY_EVENTS : GDE_ONE_EVENT)
+                    : GDE_NO_EVENT;
+        retcode = DRC_OK;
+        break;
+    }
+
+    case debugger_t::ev_resume: {
+        debug_event_t* event = va_arg(va, debug_event_t*);
+        dbg_notification_t req = get_running_notification();
+        switch (event->eid()) {
+        case STEP:
+        case PROCESS_SUSPENDED:
+            if (req == dbg_null || req == dbg_run_to)
+                if (g_host) g_host->backend()->resume();
+            break;
+        case PROCESS_EXITED:
+            break;
+        default: break;
+        }
+        retcode = DRC_OK;
+        break;
+    }
+
+    case debugger_t::ev_thread_suspend:
+        if (g_host) g_host->backend()->pause();
+        retcode = DRC_OK;
+        break;
+
+    case debugger_t::ev_thread_continue:
+        if (g_host) g_host->backend()->resume();
+        retcode = DRC_OK;
+        break;
+
+    case debugger_t::ev_set_resume_mode: {
+        thid_t tid = va_argi(va, thid_t);           (void)tid;
+        resume_mode_t resmod = va_argi(va, resume_mode_t);
+        if (!g_host) { retcode = DRC_FAILED; break; }
+        switch (resmod) {
+        case RESMOD_INTO: g_host->backend()->stepInto(); retcode = DRC_OK; break;
+        case RESMOD_OVER: g_host->backend()->stepOver(); retcode = DRC_OK; break;
+        default:          retcode = DRC_FAILED; break;
+        }
+        break;
+    }
+
+    case debugger_t::ev_read_registers: {
+        thid_t tid  = va_argi(va, thid_t);          (void)tid;
+        int clsmask = va_arg(va, int);
+        regval_t* values = va_arg(va, regval_t*);
+        retcode = read_registers(clsmask, values);
+        break;
+    }
+
+    case debugger_t::ev_write_register: {
+        thid_t tid = va_argi(va, thid_t);           (void)tid;
+        int regidx = va_arg(va, int);
+        const regval_t* value = va_arg(va, const regval_t*);
+        retcode = write_register(regidx, value);
+        break;
+    }
+
+    case debugger_t::ev_get_memory_info: {
+        meminfo_vec_t* ranges = va_arg(va, meminfo_vec_t*);
+        memory_info_t info;
+        for (int i = 0; i < get_segm_qty(); ++i) {
+            segment_t* s = getnseg(i);
+            info.start_ea = s->start_ea;
+            info.end_ea   = s->end_ea;
+            qstring buf;
+            get_segm_name(&buf, s);  info.name = buf;
+            get_segm_class(&buf, s); info.sclass = buf;
+            info.sbase = 0;
+            info.perm = SEGPERM_READ | SEGPERM_WRITE;
+            info.bitness = 1;
+            ranges->push_back(info);
+        }
+        static const char* const vdp_names[] = { "DBG_VDP_VRAM", "DBG_VDP_CRAM", "DBG_VDP_VSRAM" };
+        for (int i = 0; i < 3; ++i) {
+            info.name = vdp_names[i];
+            info.start_ea = BREAKPOINTS_BASE + 0x10000u * i;
+            info.end_ea   = info.start_ea + 0x10000;
+            info.bitness = 1;
+            ranges->push_back(info);
+        }
+        retcode = DRC_OK;
+        break;
+    }
+
+    case debugger_t::ev_read_memory: {
+        size_t* nbytes = va_arg(va, size_t*);
+        ea_t ea = va_arg(va, ea_t);
+        void* buffer = va_arg(va, void*);
+        size_t size = va_arg(va, size_t);
+        *nbytes = (size_t)region_rw(ea, buffer, size, false);
+        retcode = DRC_OK;
+        break;
+    }
+
+    case debugger_t::ev_write_memory: {
+        size_t* nbytes = va_arg(va, size_t*);
+        ea_t ea = va_arg(va, ea_t);
+        void* buffer = va_arg(va, void*);
+        size_t size = va_arg(va, size_t);
+        *nbytes = (size_t)region_rw(ea, buffer, size, true);
+        retcode = DRC_OK;
+        break;
+    }
+
+    case debugger_t::ev_check_bpt: {
+        int* bptvc = va_arg(va, int*);
+        bpttype_t type = va_argi(va, bpttype_t);
+        switch (type) {
+        case BPT_EXEC: case BPT_READ: case BPT_WRITE: case BPT_RDWR:
+            *bptvc = BPT_OK; break;
+        default:
+            *bptvc = BPT_BAD_TYPE; break;
+        }
+        retcode = DRC_OK;
+        break;
+    }
+
+    case debugger_t::ev_update_bpts: {
+        int* nbpts = va_arg(va, int*);
+        update_bpt_info_t* bpts = va_arg(va, update_bpt_info_t*);
+        int nadd = va_arg(va, int);
+        int ndel = va_arg(va, int);
+        retcode = update_bpts(nbpts, bpts, nadd, ndel);
+        break;
+    }
+
+    // Callstack: deferred (backend does not track it yet) — DRC_NONE keeps
+    // IDA's default behavior.
+    case debugger_t::ev_update_call_stack:
+        retcode = DRC_NONE;
+        break;
+
+    default:
+        retcode = DRC_NONE;
+        break;
+    }
+    return retcode;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// DEBUGGER DESCRIPTION BLOCK — layout kept from Gensida  (VERIFY-9.3)
+// ---------------------------------------------------------------------------
+debugger_t debugger = {
+    IDD_INTERFACE_VERSION,
+    PLUGIN_NAME,
+    0x8000 + 1,
+    "m68k",
+
+    DBG_FLAG_NOHOST | DBG_FLAG_CAN_CONT_BPT | DBG_FLAG_SAFE | DBG_FLAG_FAKE_ATTACH
+        | DBG_FLAG_NOPASSWORD | DBG_FLAG_NOSTARTDIR | DBG_FLAG_NOPARAMETERS
+        | DBG_FLAG_ANYSIZE_HWBPT | DBG_FLAG_DEBTHREAD | DBG_FLAG_PREFER_SWBPTS
+        | DBG_HAS_GET_PROCESSES | DBG_HAS_REQUEST_PAUSE | DBG_HAS_SET_RESUME_MODE
+        | DBG_HAS_CHECK_BPT | DBG_HAS_THREAD_SUSPEND | DBG_HAS_THREAD_CONTINUE,
+
+    register_classes,
+    RC_GENERAL,
+    registers,
+    qnumber(registers),
+
+    0x1000,        // memory page size
+
+    nullptr, 0, 0, // bpt bytes
+
+    DBG_RESMOD_STEP_INTO | DBG_RESMOD_STEP_OVER,
+};
+
+// ---------------------------------------------------------------------------
+// plugin — modern 9.x idiom: PLUGIN_MULTI + plugmod_t that listens on HT_IDD
+// (same structure as the SDK's own dbg modules, src/dbg/common_local_impl.cpp)
+// ---------------------------------------------------------------------------
+
+// accessor for the Qt-side view builder (this TU has no Qt, so the pointer
+// crosses the boundary as-is)
+EmuHost* smd_dgx_host() { return g_host; }
+
+#ifdef SMD_DGX_IDA_VIEWS
+#include "ida_views_shared.h"    // smd_dgx_register_views / unregister (ida_dock.cpp)
+#endif
+
+struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
+    smd_dgx_plugmod_t()
+    {
+        hook_event_listener(HT_IDD, this);
+        dbg = &debugger;
+#ifdef SMD_DGX_IDA_VIEWS
+        smd_dgx_register_views();
+#endif
+        msg(PLUGIN_NAME ": in-process GPGX debugger loaded\n");
+    }
+
+    ~smd_dgx_plugmod_t() override
+    {
+#ifdef SMD_DGX_IDA_VIEWS
+        smd_dgx_unregister_views();
+#endif
+        if (g_host) { g_host->stop(); delete g_host; g_host = nullptr; }
+        if (dbg == &debugger)
+            dbg = nullptr;
+        // event listeners hooked via plugmod_t are auto-unhooked on delete
+    }
+
+    ssize_t idaapi on_event(ssize_t code, va_list va) override
+    {
+        return debugger_callback(nullptr, (int)code, va);
+    }
+
+    bool idaapi run(size_t) override { return false; }
+};
+
+static plugmod_t* idaapi init()
+{
+    // only meaningful for a 68000 database
+    if (PH.id != PLFM_68K)
+        return nullptr;
+    return new smd_dgx_plugmod_t;
+}
+
+plugin_t PLUGIN = {
+    IDP_INTERFACE_VERSION,
+    PLUGIN_MULTI | PLUGIN_HIDE | PLUGIN_DBG,
+    init,
+    nullptr,   // term: unused with PLUGIN_MULTI
+    nullptr,   // run:  unused with PLUGIN_MULTI
+    PLUGIN_NAME " debugger plugin (in-process Genesis Plus GX)",
+    nullptr,
+    PLUGIN_NAME " debugger",
+    nullptr,
+};
