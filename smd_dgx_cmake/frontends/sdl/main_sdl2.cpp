@@ -1,4 +1,4 @@
-﻿#include <SDL2/SDL.h>
+#include <SDL2/SDL.h>
 #undef main
 
 #include "save_state.hpp"
@@ -1201,6 +1201,9 @@ int main(int argc, char** argv)
 		return 1;
 	}
 	sdl_video_init();
+	genesis::set_save_state_message_box([](const char* title, const char* msg) {
+		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, title, msg, sdl_video.window);
+	});
 	if (use_sound) sdl_sound_init();
 	sdl_sync_init();
 

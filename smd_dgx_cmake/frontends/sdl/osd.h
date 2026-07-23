@@ -9,11 +9,12 @@
 
 #include <stdlib.h>
 
-#include "main.h"
+#include "main_common.h"
 #include "config.h"
 #include "error.h"
 #include "unzip.h"
 #include "fileio.h"
+#include "main.h"
 
 #define osd_input_update sdl_input_update
 

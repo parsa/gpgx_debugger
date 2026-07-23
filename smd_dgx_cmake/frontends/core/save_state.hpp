@@ -5,6 +5,7 @@
 #include <fstream>
 #include <vector>
 #include <memory>
+#include <functional>
 
 extern "C"
 {
@@ -12,6 +13,11 @@ extern "C"
 }
 
 namespace genesis {
+
+/** Optional message box callback for save/load errors. Frontend sets this (e.g. SDL_ShowSimpleMessageBox or QMessageBox). */
+using message_box_fn = std::function<void(const char* title, const char* message)>;
+void set_save_state_message_box(message_box_fn fn);
+
 // Simple Result type for error handling
 template<typename T>
 class Result {
@@ -113,14 +119,13 @@ public:
     
     static void handle_result(const Result<void>& result) {
         if (result.has_error()) {
-            SDL_ShowSimpleMessageBox(
-                SDL_MESSAGEBOX_ERROR,
-                "Save State Error",
-                result.get_error().c_str(),
-                nullptr
-            );
+            message_box_fn fn = get_save_state_message_box();
+            if (fn) fn("Save State Error", result.get_error().c_str());
         }
     }
+
+private:
+    static message_box_fn& get_save_state_message_box();
 };
 
 } // namespace genesis 
