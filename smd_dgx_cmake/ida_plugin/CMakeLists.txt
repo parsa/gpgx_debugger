@@ -22,8 +22,9 @@ endif()
 
 find_library(IDA_LIB
   NAMES ida ida64
-  HINTS "${IDA_SDK_DIR}/lib/x64_win_vc_64"
+  HINTS "${IDA_SDK_DIR}/lib/x64_win_vc_64"        # licensed SDK layout
         "${IDA_SDK_DIR}/lib/x64_win_vc_64_teams"
+        "${IDA_SDK_DIR}/lib/x64_win_64"           # open-source ida-sdk layout
         "${IDA_SDK_DIR}/lib"
 )
 if (NOT IDA_LIB)
@@ -33,6 +34,7 @@ endif()
 
 add_library(smd_dgx_ida SHARED
   smd_dgx_ida.cpp
+  ida_input.c          # headless input stub (osd_input_update -> no-op)
   ida_registers.h
 )
 target_include_directories(smd_dgx_ida PRIVATE

@@ -92,9 +92,18 @@ standalone Qt-приложение для разработки/проверки.
    ida_views.cpp = Qt-виджеты (без IDA-заголовков), граница = void*(TWidget→
    QWidget) в ida_views_shared.h. Плюс: метод EmuHost::emit переименован в
    emitEvent (Qt-макрос `emit`).
-7. ⏳ Осталось при установленном SDK: реально слинковать smd_dgx_ida.dll
-   (ida.lib), проверить рантайм в IDA; VERIFY-9.3-маркеры — точки, где API
-   подтверждён по заголовкам, но не проверен в живой IDA.
+7. ✅ smd_dgx_ida.dll РЕАЛЬНО СЛИНКОВАН (6.2 МБ) против open-source ida-sdk
+   v9.3.0-sdk.3 (`src/lib/x64_win_64/ida.lib`). Экспортирует `PLUGIN`,
+   импортирует `ida.dll` + Qt6. Эмулятор + вьюшки статически внутри.
+   Добавлена ida_input.c (osd_input_update → no-op, как в каждом фронте).
+8. ⏳ Осталось только рантайм-тест в установленной IDA 9.3:
+   - **СБИЛДИТЬ В RELEASE** (preset x64-release): Debug-сборка тянет
+     Qt6Widgetsd.dll (debug-Qt), а IDA несёт RELEASE-Qt (Qt6Widgets.dll) +
+     release-CRT — их мешать нельзя. Плагин обязан быть release, чтобы
+     подхватить Qt, уже загруженный IDA.
+   - положить .dll в <IDA>/plugins/, открыть Mega Drive ROM (или idb на
+     процессоре 68000 — гейт PH.id==PLFM_68K), пройти VERIFY-9.3-маркеры.
+   - Единый `ida.dll` (не ida/ida64) — 9.x перешла на ea64-везде.
 
 Сборка плагина (когда SDK установлен):
 ```
