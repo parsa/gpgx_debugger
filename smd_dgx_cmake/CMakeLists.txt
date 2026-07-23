@@ -1,4 +1,4 @@
-﻿cmake_minimum_required (VERSION 3.20)
+cmake_minimum_required (VERSION 3.20)
 
 # Enable Hot Reload for MSVC compilers if supported.
 if (POLICY CMP0141)
@@ -29,25 +29,122 @@ if (GX_ENABLE_CHD)
   target_link_libraries(gx_core PUBLIC gx_libchdr)
 endif()
 
-add_library(debug_lib STATIC)
-target_sources(debug_lib PRIVATE "debugger/debugger.cpp")
+# Shared frontend code (config, error, fileio, save_state, unzip) - reused by SDL and Qt6
+set(GX_FRONTEND_CORE "${CMAKE_CURRENT_LIST_DIR}/frontends/core")
+add_library(frontend_common STATIC
+  "${GX_FRONTEND_CORE}/config.c"
+  "${GX_FRONTEND_CORE}/error.c"
+  "${GX_FRONTEND_CORE}/fileio.c"
+  "${GX_FRONTEND_CORE}/save_state_message.cpp"
+  "${GX_FRONTEND_CORE}/gx/gx.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/frontends/sdl/unzip.c"
+)
+target_include_directories(frontend_common PUBLIC "${GX_FRONTEND_CORE}")
+target_link_libraries(frontend_common PRIVATE gx_core ZLIB::ZLIB)
+set_target_properties(frontend_common PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
+# std::filesystem may require explicit link on some toolchains (e.g. GCC with libstdc++)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL ""))
+  target_link_libraries(frontend_common PRIVATE stdc++fs)
+endif()
 
-target_compile_definitions(debug_lib PRIVATE $<$<BOOL:${DEBUG_68K}>:DEBUG_68K>)
+# ---- Headless debugger core (NO Qt) ----
+# Emulator + debug backend + transport + host, statically linkable into any
+# frontend: the standalone Qt app, and (phase 2) the IDA 9.2+ plugin.
+# Depends only on the emulator core and frontend_common; zero UI/toolkit deps.
+add_library(smd_dgx_emu STATIC
+  "${CMAKE_CURRENT_LIST_DIR}/debugger/GpgxBackend.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/debugger/InProcTransport.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/debugger/EmuHost.cpp"
+)
+target_include_directories(smd_dgx_emu PUBLIC "${CMAKE_CURRENT_LIST_DIR}")
+target_link_libraries(smd_dgx_emu PUBLIC gx_core frontend_common)
+set_target_properties(smd_dgx_emu PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
 
+# ---- SDL2 + ImGui frontend ----
 find_package(OpenGL REQUIRED)
 find_package(SDL2 CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 
-set(GX_PLATFORM_ROOT "${CMAKE_CURRENT_LIST_DIR}/frontends/sdl")
-add_library(gx_platform_lib "${GX_PLATFORM_ROOT}/sdl.c" "${GX_PLATFORM_ROOT}/config.c" "${GX_PLATFORM_ROOT}/error.c" "${GX_PLATFORM_ROOT}/fileio.c" "${GX_PLATFORM_ROOT}/unzip.c")
-target_link_libraries(gx_platform_lib PRIVATE gx_core)
+set(GX_PLATFORM_SDL "${CMAKE_CURRENT_LIST_DIR}/frontends/sdl")
+add_library(gx_platform_lib STATIC "${GX_PLATFORM_SDL}/sdl.c")
+target_include_directories(gx_platform_lib PUBLIC "${GX_PLATFORM_SDL}" "${GX_FRONTEND_CORE}")
+target_link_libraries(gx_platform_lib PRIVATE gx_core frontend_common)
 
 add_executable(smd_dgx_cmake)
 target_sources(smd_dgx_cmake PRIVATE "frontends/sdl/osd.h" "frontends/sdl/main_sdl2.cpp")
+target_include_directories(smd_dgx_cmake PRIVATE "frontends/sdl" "frontends/core")
+target_link_libraries(smd_dgx_cmake PRIVATE gx_core gx_platform_lib frontend_common smd_dgx_emu SDL2::SDL2 OpenGL::GL imgui::imgui)
 
-target_link_libraries(smd_dgx_cmake PRIVATE gx_core gx_platform_lib debug_lib SDL2::SDL2 OpenGL::GL imgui::imgui)
+# ---- Qt6 frontend (optional) ----
+find_package(Qt6 COMPONENTS Widgets Gui Core QUIET)
+if (Qt6_FOUND)
+  set(GX_PLATFORM_QT6 "${CMAKE_CURRENT_LIST_DIR}/frontends/qt6")
 
-if (CMAKE_VERSION VERSION_GREATER 3.12)
-  set_target_properties(smd_dgx_cmake PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
-  set_target_properties(debug_lib PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
+  add_library(gx_platform_qt6 STATIC "${GX_PLATFORM_QT6}/qt_input.c")
+  target_include_directories(gx_platform_qt6 PUBLIC "${GX_PLATFORM_QT6}" "${GX_FRONTEND_CORE}")
+  target_link_libraries(gx_platform_qt6 PRIVATE gx_core frontend_common)
+
+  add_executable(smd_dgx_qt6)
+  target_sources(smd_dgx_qt6 PRIVATE
+    # entry point
+    "${GX_PLATFORM_QT6}/main_qt6.cpp"
+    # frontend
+    "${GX_PLATFORM_QT6}/MainWindow.h"
+    "${GX_PLATFORM_QT6}/MainWindow.cpp"
+    "${GX_PLATFORM_QT6}/EmulatorThread.h"
+    "${GX_PLATFORM_QT6}/EmulatorThread.cpp"
+    "${GX_PLATFORM_QT6}/AudioOutput.cpp"
+    # views (parity set with the Gens debug windows)
+    "${GX_PLATFORM_QT6}/views/EmulatorScreen.h"
+    "${GX_PLATFORM_QT6}/views/EmulatorScreen.cpp"
+    "${GX_PLATFORM_QT6}/views/VdpRegView.h"
+    "${GX_PLATFORM_QT6}/views/VdpRegView.cpp"
+    "${GX_PLATFORM_QT6}/views/VdpRamView.h"
+    "${GX_PLATFORM_QT6}/views/VdpRamView.cpp"
+    "${GX_PLATFORM_QT6}/views/VdpSpritesView.h"
+    "${GX_PLATFORM_QT6}/views/VdpSpritesView.cpp"
+    "${GX_PLATFORM_QT6}/views/PlaneExplorerView.h"
+    "${GX_PLATFORM_QT6}/views/PlaneExplorerView.cpp"
+    "${GX_PLATFORM_QT6}/views/SoundDebugView.h"
+    "${GX_PLATFORM_QT6}/views/SoundDebugView.cpp"
+    "${GX_PLATFORM_QT6}/views/MemoryView.h"
+    "${GX_PLATFORM_QT6}/views/MemoryView.cpp"
+    "${GX_PLATFORM_QT6}/views/RamSearchView.h"
+    "${GX_PLATFORM_QT6}/views/RamSearchView.cpp"
+    "${GX_PLATFORM_QT6}/views/RamWatchView.h"
+    "${GX_PLATFORM_QT6}/views/RamWatchView.cpp"
+  )
+
+  target_include_directories(smd_dgx_qt6 PRIVATE
+    "${GX_PLATFORM_QT6}"
+    "${GX_PLATFORM_QT6}/views"
+    "${CMAKE_CURRENT_LIST_DIR}"          # for "debugger/..." includes
+    "${CMAKE_CURRENT_LIST_DIR}/frontends/core"
+  )
+
+  target_link_libraries(smd_dgx_qt6 PRIVATE
+    gx_core gx_platform_qt6 frontend_common smd_dgx_emu
+    Qt6::Widgets Qt6::Gui Qt6::Core
+    $<$<BOOL:${WIN32}>:winmm>
+  )
+
+  set_target_properties(smd_dgx_qt6 PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED YES
+    AUTOMOC ON
+  )
+
+  if(WIN32)
+    set_target_properties(smd_dgx_qt6 PROPERTIES WIN32_EXECUTABLE TRUE)
+    get_filename_component(_qt6_root "${Qt6_DIR}/../.." REALPATH)
+    add_custom_command(TARGET smd_dgx_qt6 POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -DEXE_PATH="$<TARGET_FILE:smd_dgx_qt6>" -DQT_ROOT="${_qt6_root}" -P "${CMAKE_CURRENT_LIST_DIR}/cmake/deploy_qt.cmake"
+      COMMENT "Deploy Qt DLLs and plugins to build folder"
+    )
+  endif()
 endif()
+
+set_target_properties(smd_dgx_cmake PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
+
+# ---- IDA 9.2+ debugger plugin (optional, gated on IDA_SDK_DIR) ----
+add_subdirectory(ida_plugin)

@@ -5,7 +5,7 @@
     "sdl2",
     {
       "name": "imgui",
-      "features": [ "opengl3-binding", "sdl2-binding", "docking-experimental" ]
+      "features": ["opengl3-binding", "sdl2-binding", "docking-experimental"]
     },
     "zlib"
   ]

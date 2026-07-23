@@ -47,6 +47,7 @@ function(gx_add_core target GX_ROOT)
     _7ZIP_ST
     FLAC__NO_DLL
     FLAC__HAS_OGG=0
+    BLIP_ASSERT                       # bounds-check blip_read_samples (guards count=0 do-while crash)
     $<$<BOOL:${GX_HOOK_CPU}>:HOOK_CPU>
     $<$<AND:$<BOOL:${GX_ENABLE_CHD}>,$<PLATFORM_ID:Windows>>:HAVE_FSEEKO>
     $<$<BOOL:${DEBUG_68K}>:DEBUG_68K>

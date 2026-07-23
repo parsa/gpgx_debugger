@@ -14,6 +14,7 @@ sdl/build_sdl
 sdl/build_sdl2
 sdl/gx_vstudio/gx_vstudio/x64
 smd_dgx_cmake/out
+/out/
 builds/
 
 *.o

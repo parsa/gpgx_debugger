@@ -10,7 +10,8 @@
         "cacheVariables": {
           "CMAKE_C_COMPILER": "cl.exe",
           "CMAKE_CXX_COMPILER": "cl.exe",
-          "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+          "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+          "CMAKE_PREFIX_PATH": "C:/Qt/6.8.2/msvc2022_64"
         },
         "condition": {
           "type": "equals",
@@ -19,7 +20,7 @@
         },
         "environment": {
           "VCPKG_ROOT": "C:/Program Files/Microsoft Visual Studio/18/Community/VC/vcpkg",
-          "SMD_IDA_ROOT": "C:/Projects/smd_ida_tools2"
+          "SMD_IDA_ROOT": "E:/Projects/smd_ida_tools2"
         }
       },
         {
@@ -90,7 +91,7 @@
             "installDir": "${sourceDir}/out/install/${presetName}",
             "cacheVariables": {
               "CMAKE_BUILD_TYPE": "Debug",
-              "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" // Change for macOS vcpkg toolchain
+              "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
             },
             "condition": {
                 "type": "equals",
