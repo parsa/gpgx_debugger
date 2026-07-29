@@ -31,3 +31,12 @@ typedef enum {
   R_V08, R_V09, R_V10, R_V11, R_V12, R_V13, R_V14, R_V15,
   R_V16, R_V17, R_V18, R_V19, R_V20, R_V21, R_V22, R_V23,
 } smd_register_t;
+
+// A-line ($Axxx) and F-line ($Fxxx) opcodes are illegal on a 68000 and trap
+// through vectors 10 and 11. Games use them as syscalls, but the processor
+// module only sees an invalid instruction and stops following the code, so we
+// decode them ourselves as these custom types.
+typedef enum {
+  M68K_linea = CUSTOM_INSN_ITYPE,
+  M68K_linef,
+} m68k_insn_type_t;

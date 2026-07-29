@@ -15,11 +15,13 @@
 
 #include <ida.hpp>
 #include <bytes.hpp>
+#include <idp.hpp>
 #include <kernwin.hpp>
 #include <lines.hpp>
 #include <ua.hpp>
+#include <xref.hpp>
 
-#include "debugger/EmuHost.h"   // not used directly; keeps include order uniform
+#include "ida_registers.h"      // M68K_linea / M68K_linef
 
 namespace {
 
@@ -225,6 +227,70 @@ struct annotate_ah_t : public action_handler_t {
 annotate_ah_t* g_handler = nullptr;
 const char* const kName = "smd_dgx:identify_const";
 
+// ---------------------------------------------------------------------------
+// A-line / F-line traps
+//
+// $Axxx and $Fxxx are illegal on a 68000 and vector through 10 and 11. Games
+// use them as syscalls — the trap handler reads the low byte as a routine
+// number — but the processor module just sees an invalid instruction and stops
+// following the code there, which strands everything after the call. Decoding
+// them as two-byte instructions that flow on (and reference the handler)
+// keeps the analysis going.
+//
+// Only $A0xx/$F0xx, matching Gensida: every $Axxx is technically a trap, but
+// data misidentified as code is full of them, and widening this turns stray
+// bytes into fake instructions.
+// ---------------------------------------------------------------------------
+constexpr ea_t kVectorLineA = 0x0A * 4;   // vector 10
+constexpr ea_t kVectorLineF = 0x0B * 4;   // vector 11
+
+struct idp_listener_t : public event_listener_t {
+    ssize_t idaapi on_event(ssize_t code, va_list va) override
+    {
+        switch (code) {
+        case processor_t::ev_ana_insn: {
+            insn_t* insn = va_arg(va, insn_t*);
+            const uint8_t hi = get_byte(insn->ea);
+            if (hi != 0xA0 && hi != 0xF0) break;
+
+            insn->itype = (hi == 0xA0) ? M68K_linea : M68K_linef;
+            insn->size  = 2;
+
+            // operand 1: the handler this traps into
+            insn->Op1.type  = o_near;
+            insn->Op1.dtype = dt_dword;
+            insn->Op1.offb  = 1;
+            insn->Op1.addr  = get_dword((hi == 0xA0) ? kVectorLineA : kVectorLineF) & 0xFFFFFF;
+
+            // operand 2: the routine number the handler dispatches on
+            insn->Op2.type  = o_imm;
+            insn->Op2.dtype = dt_byte;
+            insn->Op2.offb  = 1;
+            insn->Op2.value = get_byte(insn->ea + 1);
+            return insn->size;
+        }
+        case processor_t::ev_emu_insn: {
+            const insn_t* insn = va_arg(va, const insn_t*);
+            if (insn->itype != M68K_linea && insn->itype != M68K_linef) break;
+            insn->add_cref(insn->Op1.addr, 0, fl_CN);              // into the handler
+            insn->add_cref(insn->ea + insn->size, insn->Op1.offb, fl_F);  // and onwards
+            return 1;
+        }
+        case processor_t::ev_out_mnem: {
+            outctx_t* ctx = va_arg(va, outctx_t*);
+            if (ctx->insn.itype != M68K_linea && ctx->insn.itype != M68K_linef) break;
+            ctx->out_custom_mnem(ctx->insn.itype == M68K_linea ? "line_a" : "line_f");
+            return 1;
+        }
+        default:
+            break;
+        }
+        return 0;
+    }
+};
+
+idp_listener_t g_idp;
+
 } // namespace
 
 void smd_dgx_register_asm()
@@ -234,10 +300,14 @@ void smd_dgx_register_asm()
         kName, "Identify SMD constant", g_handler, nullptr, "J", nullptr, -1);
     register_action(desc);
     attach_action_to_menu("Edit/Other/", kName, SETMENU_APP);
+
+    hook_event_listener(HT_IDP, &g_idp, nullptr);
 }
 
 void smd_dgx_unregister_asm()
 {
+    unhook_event_listener(HT_IDP, &g_idp);
+
     unregister_action(kName);
     delete g_handler;
     g_handler = nullptr;
