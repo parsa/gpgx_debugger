@@ -1,5 +1,6 @@
 #include "MainWindow.h"
-#include "EmulatorThread.h"
+#include "debugger/EmuHost.h"
+#include "platform/AudioOutput.h"
 #include "views/EmulatorScreen.h"
 #include "views/VdpRamView.h"
 #include "views/VdpRegView.h"
@@ -20,6 +21,7 @@
 #include <QMessageBox>
 #include <QCloseEvent>
 #include <QFileInfo>
+#include <QFile>
 #include <QDir>
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
@@ -53,20 +55,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     connect(&refreshTimer_, &QTimer::timeout, this, &MainWindow::refreshViews);
 }
 
-MainWindow::~MainWindow()
+MainWindow::~MainWindow() { stopEmulator(); }
+
+void MainWindow::stopEmulator()
 {
-    if (emuThread_) {
-        emuThread_->requestStop();
-        emuThread_->wait();
-    }
+    if (emuHost_) { emuHost_->stop(); delete emuHost_; emuHost_ = nullptr; }
+    delete audio_; audio_ = nullptr;      // outlives the host: the sink writes to it
 }
 
 void MainWindow::closeEvent(QCloseEvent* e)
 {
-    if (emuThread_) {
-        emuThread_->requestStop();
-        emuThread_->wait();
-    }
+    stopEmulator();
     e->accept();
 }
 
@@ -161,38 +160,42 @@ void MainWindow::openRom()
 
 void MainWindow::openRomFile(const QString& path)
 {
-    if (emuThread_) {
-        emuThread_->requestStop();
-        emuThread_->wait();
-        delete emuThread_;
-        emuThread_ = nullptr;
+    stopEmulator();
+
+    // Pre-flight here rather than in the host: a missing or empty file is a
+    // UI-level complaint, and load_rom() cannot tell the two apart.
+    const QFileInfo fi(path);
+    if (!fi.exists() || !fi.isFile() || fi.size() <= 0) {
+        QMessageBox::critical(this, QStringLiteral("Error"),
+                              QStringLiteral("Not a readable ROM file:\n%1").arg(path));
+        return;
     }
 
-    emuThread_ = new EmulatorThread(screen_, backend_, this);
-    connect(emuThread_, &EmulatorThread::romLoaded, this, &MainWindow::onRomLoaded);
+    audio_   = new AudioOutput();
+    emuHost_ = new EmuHost();
+    emuHost_->setFrameSink([this](const uint8_t* d, int w, int h, int pitch,
+                                  int vx, int vy, int vw, int vh) {
+        screen_->pushFrame(d, w, h, pitch, vx, vy, vw, vh);   // takes its own lock
+    });
+    emuHost_->setAudioSink([this](const int16_t* stereo, int frames) {
+        audio_->write(stereo, frames);
+    });
 
-    if (!emuThread_->loadRom(path)) {
-        delete emuThread_;
-        emuThread_ = nullptr;
+    if (!emuHost_->start(QFile::encodeName(path).toStdString())) {
+        QMessageBox::critical(this, QStringLiteral("Error"),
+                              QStringLiteral("gpgx could not load:\n%1").arg(path));
+        stopEmulator();
         return;
     }
 
     // States live beside the ROM here; the IDA host puts them beside the database.
-    {
-        QFileInfo fi(path);
-        statesView_->setStatesDir(fi.dir().filePath(fi.completeBaseName() + QStringLiteral("_states")));
-    }
+    statesView_->setStatesDir(fi.dir().filePath(fi.completeBaseName() + QStringLiteral("_states")));
 
-    emuThread_->start();
     refreshTimer_.start();
     statusLabel_->setText(QStringLiteral("Running: ") + path);
     actPause_->setEnabled(true);
     actResume_->setEnabled(false);
-}
-
-void MainWindow::onRomLoaded(bool ok, const QString& msg)
-{
-    if (!ok) QMessageBox::critical(this, QStringLiteral("Error"), msg);
+    screen_->setFocus();
 }
 
 void MainWindow::refreshViews()
@@ -225,6 +228,7 @@ void MainWindow::onPaused(uint32_t pc)
     ramSearchView_->refresh();
     ramWatchView_->refresh();
 
+    if (audio_) audio_->pause(true);     // nothing refills it while stopped
     actPause_->setEnabled(false);
     actResume_->setEnabled(true);
     actStepInto_->setEnabled(true);
@@ -234,6 +238,7 @@ void MainWindow::onPaused(uint32_t pc)
 
 void MainWindow::onResumed()
 {
+    if (audio_) audio_->pause(false);
     actPause_->setEnabled(true);
     actResume_->setEnabled(false);
     actStepInto_->setEnabled(false);
@@ -241,7 +246,7 @@ void MainWindow::onResumed()
     statusLabel_->setText(QStringLiteral("Running"));
 }
 
-void MainWindow::debugPause()   { if (emuThread_ && emuThread_->isRunning()) backend_->pause(); }
+void MainWindow::debugPause()   { if (emuHost_ && emuHost_->isRunning()) backend_->pause(); }
 void MainWindow::debugResume()  { backend_->resume(); }
 void MainWindow::debugStepInto(){ backend_->stepInto(); }
 void MainWindow::debugStepOver(){ backend_->stepOver(); }

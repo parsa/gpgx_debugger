@@ -7,7 +7,8 @@
 #include <cstdint>
 
 class EmulatorScreen;
-class EmulatorThread;
+class EmuHost;
+class AudioOutput;
 class GpgxBackend;
 class VdpRamView;
 class VdpRegView;
@@ -35,7 +36,6 @@ public slots:
     void openRomFile(const QString& path);
 
 private slots:
-    void onRomLoaded(bool ok, const QString& msg);
     void onPaused(uint32_t pc);
     void onResumed();
     void debugPause();
@@ -46,11 +46,13 @@ private slots:
 
 private:
     void buildMenus();
+    void stopEmulator();
     void buildDocks();
 
     GpgxBackend*      backend_   = nullptr;
     EmulatorScreen*   screen_    = nullptr;
-    EmulatorThread*   emuThread_ = nullptr;
+    EmuHost*          emuHost_ = nullptr;
+    AudioOutput*      audio_   = nullptr;
     QTimer            refreshTimer_;
 
     VdpRamView*        vdpRamView_    = nullptr;
