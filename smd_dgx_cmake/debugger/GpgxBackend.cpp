@@ -11,8 +11,11 @@ extern "C" {
 #include <system.h>           // vdp_pal, MCYCLES_PER_LINE
 #include <sound/sound.h>      // fm_debug_regs
 #include <sound/psg.h>        // psg_debug_regs
+#include <state.h>            // state_save/state_load, STATE_SIZE
 #include <debug/cpuhook.h>
 }
+
+#include <fstream>
 
 #include <gx/gx.hpp>
 #include <cstring>
@@ -126,6 +129,34 @@ bool GpgxBackend::writeMemory(uint32_t addr, const uint8_t* data, uint32_t size)
         else return false;
     }
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Save states — see the threading note on IDebugBackend
+// ---------------------------------------------------------------------------
+bool GpgxBackend::saveState(const char* path)
+{
+    if (!path || !*path) return false;
+    std::vector<uint8_t> buf(STATE_SIZE);
+    const int len = state_save(buf.data());
+    if (len <= 0) return false;
+    std::ofstream f(path, std::ios::binary);
+    if (!f) return false;
+    f.write(reinterpret_cast<const char*>(buf.data()), len);
+    return static_cast<bool>(f);
+}
+
+bool GpgxBackend::loadState(const char* path)
+{
+    if (!path || !*path) return false;
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f) return false;
+    const std::streamsize size = f.tellg();
+    if (size <= 0 || size > static_cast<std::streamsize>(STATE_SIZE)) return false;
+    f.seekg(0);
+    std::vector<uint8_t> buf(STATE_SIZE, 0);
+    if (!f.read(reinterpret_cast<char*>(buf.data()), size)) return false;
+    return state_load(buf.data()) != 0;
 }
 
 // ---------------------------------------------------------------------------

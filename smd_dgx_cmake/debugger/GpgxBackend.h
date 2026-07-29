@@ -21,6 +21,9 @@ public:
     bool writeMemory(uint32_t addr, const uint8_t* data, uint32_t size) override;
     std::vector<uint8_t> readZ80Memory(uint16_t addr, uint16_t size) override;
 
+    bool saveState(const char* path) override;
+    bool loadState(const char* path) override;
+
     void     setPad(int port, uint16_t buttons) override;
     uint16_t getPad(int port) override;
 

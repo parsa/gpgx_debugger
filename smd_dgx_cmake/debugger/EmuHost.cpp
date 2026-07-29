@@ -1,6 +1,7 @@
 #include "EmuHost.h"
 
 #include <chrono>
+#include <cstring>
 
 #include <gx/gx.hpp>
 
@@ -112,10 +113,45 @@ void EmuHost::run(std::string /*romPath*/)
 
 void EmuHost::drainCommands()
 {
+    drainTasks();
     if (!transport_) return;
     DebugCommand cmd;
     while (transport_->recvCommand(cmd))
         dispatch(cmd);
+}
+
+void EmuHost::drainTasks()
+{
+    for (;;) {
+        Task* t = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(taskMx_);
+            if (tasks_.empty()) return;
+            t = tasks_.front();
+            tasks_.pop_front();
+        }
+        (*t->fn)();
+        {
+            std::lock_guard<std::mutex> lk(taskMx_);
+            t->done = true;
+        }
+        taskCv_.notify_all();
+    }
+}
+
+bool EmuHost::invoke(const std::function<void()>& fn)
+{
+    if (!running_.load() || !thread_.joinable()) return false;
+
+    Task task{ &fn, false };
+    {
+        std::lock_guard<std::mutex> lk(taskMx_);
+        tasks_.push_back(&task);
+    }
+    std::unique_lock<std::mutex> lk(taskMx_);
+    // The emulation thread drains tasks between frames and while paused, so
+    // this completes in either state; the timeout only guards a dying host.
+    return taskCv_.wait_for(lk, std::chrono::seconds(5), [&] { return task.done; });
 }
 
 void EmuHost::dispatch(const DebugCommand& cmd)
@@ -150,6 +186,22 @@ void EmuHost::dispatch(const DebugCommand& cmd)
     // in-proc hosts via backend() directly (valid while paused). A separate
     // process transport will add a reply channel; not needed for static link.
     default: break;
+    }
+}
+
+void EmuHost::copyViewport(std::vector<uint8_t>& out, int& w, int& h) const
+{
+    const t_bitmap& bm = ::bitmap;
+    w = bm.viewport.w;
+    h = bm.viewport.h;
+    out.clear();
+    if (!bm.data || w <= 0 || h <= 0) { w = h = 0; return; }
+
+    out.resize(static_cast<size_t>(w) * h * 2);
+    for (int y = 0; y < h; ++y) {
+        const uint8_t* src = bm.data + (size_t)(bm.viewport.y + y) * bm.pitch
+                                     + (size_t)bm.viewport.x * 2;
+        std::memcpy(out.data() + (size_t)y * w * 2, src, (size_t)w * 2);
     }
 }
 

@@ -26,6 +26,7 @@
 
 // emulator (NO Qt here)
 #include "debugger/EmuHost.h"
+#include "debugger/BridgeServer.h"
 #ifdef _WIN32
 #include "platform/AudioOutput.h"
 #endif
@@ -83,6 +84,9 @@ std::map<BpKey, int> g_bpIds;
 // emulation thread only (via the audio sink), created/destroyed around it.
 AudioOutput* g_audio = nullptr;
 #endif
+
+// Control socket for external agents (the MCP server). Loopback only.
+BridgeServer* g_bridge = nullptr;
 
 // ---------------------------------------------------------------------------
 // codemap -> auto_make_code on the main thread
@@ -432,6 +436,14 @@ drc_t start_process(const char* path, const char* input_path)
     }
     // start paused at the entry: request a pause right away
     g_host->backend()->pause();
+
+    delete g_bridge;
+    g_bridge = new BridgeServer(g_host);
+    if (g_bridge->start())
+        msg(PLUGIN_NAME ": control socket on 127.0.0.1:%u\n", g_bridge->port());
+    else
+        msg(PLUGIN_NAME ": control socket unavailable (port busy?)\n");
+
     return DRC_OK;
 }
 
@@ -484,7 +496,10 @@ ssize_t idaapi debugger_callback(void*, int msgid, va_list va)
         break;
 
     case debugger_t::ev_exit_process:
+        // Close the socket before the host: its handler holds an EmuHost*.
+        delete g_bridge; g_bridge = nullptr;
         if (g_host) { g_host->stop(); }
+        stop_audio();
         retcode = DRC_OK;
         break;
 
@@ -691,7 +706,9 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
 #ifdef SMD_DGX_IDA_VIEWS
         smd_dgx_unregister_views();
 #endif
+        delete g_bridge; g_bridge = nullptr;
         if (g_host) { g_host->stop(); delete g_host; g_host = nullptr; }
+        stop_audio();
         if (dbg == &debugger)
             dbg = nullptr;
         // event listeners hooked via plugmod_t are auto-unhooked on delete

@@ -64,7 +64,11 @@ add_library(smd_dgx_emu STATIC
   "${CMAKE_CURRENT_LIST_DIR}/debugger/GpgxBackend.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/debugger/InProcTransport.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/debugger/EmuHost.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/debugger/BridgeServer.cpp"
 )
+if (WIN32)
+  target_link_libraries(smd_dgx_emu PUBLIC ws2_32)   # BridgeServer sockets
+endif()
 target_include_directories(smd_dgx_emu PUBLIC "${CMAKE_CURRENT_LIST_DIR}")
 target_link_libraries(smd_dgx_emu PUBLIC gx_core frontend_common)
 set_target_properties(smd_dgx_emu PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
