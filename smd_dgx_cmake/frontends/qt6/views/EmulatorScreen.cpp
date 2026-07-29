@@ -2,6 +2,8 @@
 #include <QPainter>
 #include <QMutexLocker>
 #include <QKeyEvent>
+#include <QContextMenuEvent>
+#include <QMenu>
 #include <cstring>
 
 EmulatorScreen::EmulatorScreen(QWidget* parent) : QWidget(parent)
@@ -75,13 +77,61 @@ void EmulatorScreen::paintEvent(QPaintEvent*)
     if (front_.isNull()) return;
 
     QPainter p(this);
-    p.setRenderHint(QPainter::SmoothPixmapTransform);
-    QRectF dst;
-    if (keepAspect_) {
-        double sa = (double)front_.width()/front_.height(), da = (double)width()/height();
-        if (da > sa) { double h=height(), w=h*sa; dst={((double)width()-w)/2.,0.,w,h}; }
-        else         { double w=width(),  h=w/sa; dst={0.,(double)(height()-h)/2.,w,h}; }
+    p.setRenderHint(QPainter::SmoothPixmapTransform, smooth_);
+    const QRectF dst = targetRect();
+    if (dst != QRectF(rect()))
         p.fillRect(rect(), Qt::black);
-    } else { dst = QRectF(rect()); }
     p.drawImage(dst, front_);
+}
+
+// Where the frame lands inside the widget.
+//   integer scale : largest whole multiple that fits, centred — one emulated
+//                   pixel becomes an exact NxN block, nothing is resampled.
+//                   Falls back to fitting when the widget is smaller than one
+//                   full frame, otherwise there would be nothing to show.
+//   fit           : fill the widget, optionally preserving aspect.
+QRectF EmulatorScreen::targetRect() const
+{
+    const double sw = front_.width(), sh = front_.height();
+    if (sw <= 0 || sh <= 0) return QRectF(rect());
+
+    if (integerScale_) {
+        const int n = qMin(int(width() / sw), int(height() / sh));
+        if (n >= 1) {
+            const double w = sw * n, h = sh * n;
+            return QRectF((width() - w) / 2.0, (height() - h) / 2.0, w, h);
+        }
+        // too small for 1x — fall through to a fitted, aspect-correct image
+    }
+
+    if (keepAspect_ || integerScale_) {
+        const double sa = sw / sh, da = double(width()) / double(height());
+        if (da > sa) { const double h = height(), w = h * sa; return {(width() - w) / 2.0, 0.0, w, h}; }
+        const double w = width(), h = w / sa;
+        return {0.0, (height() - h) / 2.0, w, h};
+    }
+    return QRectF(rect());
+}
+
+void EmulatorScreen::contextMenuEvent(QContextMenuEvent* e)
+{
+    QMenu menu(this);
+
+    auto* pixel = menu.addAction(QStringLiteral("Pixel perfect (integer scale)"));
+    pixel->setCheckable(true);
+    pixel->setChecked(integerScale_);
+    connect(pixel, &QAction::toggled, this, &EmulatorScreen::setIntegerScale);
+
+    auto* smooth = menu.addAction(QStringLiteral("Smooth filtering"));
+    smooth->setCheckable(true);
+    smooth->setChecked(smooth_);
+    connect(smooth, &QAction::toggled, this, &EmulatorScreen::setSmooth);
+
+    auto* aspect = menu.addAction(QStringLiteral("Keep aspect ratio"));
+    aspect->setCheckable(true);
+    aspect->setChecked(keepAspect_);
+    aspect->setEnabled(!integerScale_);       // integer scaling implies it
+    connect(aspect, &QAction::toggled, this, &EmulatorScreen::setKeepAspect);
+
+    menu.exec(e->globalPos());
 }
