@@ -47,6 +47,17 @@ public:
     virtual void     setPad(int port, uint16_t buttons) = 0;
     virtual uint16_t getPad(int port) = 0;
 
+    // Return addresses of the calls currently on the stack, outermost first.
+    // Heuristic (tracked from jsr/bsr/rts/rte), like the original Gens.
+    virtual std::vector<uint32_t> getCallstack() = 0;
+
+    // Breakpoint conditions are written in the *client's* language (IDA's IDC
+    // or Python), so only the client can evaluate them. A host that can do so
+    // installs an evaluator; without one, conditions are ignored and every
+    // matching breakpoint fires.
+    using ConditionEval = std::function<bool(uint32_t elang, const std::string& expr)>;
+    virtual void setConditionEvaluator(ConditionEval) = 0;
+
     // Breakpoints
     virtual int  addBreakpoint(const Breakpoint&) = 0;
     virtual void removeBreakpoint(int id) = 0;

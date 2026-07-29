@@ -41,6 +41,8 @@ public:
     void removeBreakpoint(int id) override;
     void clearBreakpoints() override;
     std::vector<Breakpoint> getBreakpoints() override;
+    std::vector<uint32_t>   getCallstack() override;
+    void setConditionEvaluator(ConditionEval e) override { condEval_ = std::move(e); }
 
     void pause() override;
     void resume() override;
@@ -70,6 +72,8 @@ public:
 private:
     void firePause(uint32_t pc);
     bool matchBreakpoint(int type, uint32_t addr);
+    void trackCall(uint32_t pc);          // maintain callstack_ from the opcode at pc
+    uint16_t opcodeAt(uint32_t pc) const;
 
     PauseCb  pauseCb_;
     ResumeCb resumeCb_;
@@ -88,6 +92,10 @@ private:
 
     std::mutex codemapMutex_;
     std::map<uint32_t, uint32_t> codemap_;
+
+    ConditionEval condEval_;
+    std::mutex            callstackMutex_;
+    std::vector<uint32_t> callstack_;
 };
 
 extern GpgxBackend* g_gpgxBackend;

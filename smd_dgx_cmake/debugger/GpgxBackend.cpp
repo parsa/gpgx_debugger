@@ -84,6 +84,10 @@ VdpState GpgxBackend::getVdpState()
     v.cram  = ::cram;
     v.vsram = ::vsram;
     v.sat   = ::sat;
+    unsigned int a = 0, c = 0;
+    vdp_debug_get_access(&a, &c);
+    v.vdp_addr = uint16_t(a);
+    v.vdp_code = uint8_t(c);
     return v;
 }
 
@@ -381,6 +385,8 @@ bool GpgxBackend::loadRom(const char* path)
     static std::vector<uint8_t> framebuffer(720 * 576 * 4, 0);
     gx::bitmap_data() = framebuffer.data();
 
+    { std::lock_guard<std::mutex> lk(callstackMutex_); callstack_.clear(); }
+
     bool ok = gx::load_rom(path);
     if (ok) running_.store(true);
     return ok;
@@ -398,12 +404,21 @@ void GpgxBackend::onCpuHook(int type, int /*width*/, uint32_t addr, uint32_t /*v
             codemap_[addr] = lastPc_;
         }
         lastPc_ = addr;
+        trackCall(addr);
         bool brk = stepInto_.exchange(false);
         if (!brk) { int so = stepOverAddr_.load(); if (so >= 0 && (uint32_t)so == addr) { stepOverAddr_.store(-1); brk = true; } }
         if (!brk) brk = matchBreakpoint(type, addr);
         if (brk) firePause(addr);
     } else if (type & (HOOK_M68K_R | HOOK_M68K_W)) {
         if (matchBreakpoint(type, addr)) firePause(lastPc_);
+    } else if (type & (HOOK_VRAM_R | HOOK_VRAM_W | HOOK_CRAM_R | HOOK_CRAM_W |
+                       HOOK_VSRAM_R | HOOK_VSRAM_W)) {
+        // The core reports an offset within one VDP memory; breakpoints live in
+        // the combined space, so bias it the same way the IDA plugin does.
+        uint32_t linear = addr & 0xFFFF;
+        if (type & (HOOK_CRAM_R  | HOOK_CRAM_W))  linear += VDP_BP_CRAM;
+        else if (type & (HOOK_VSRAM_R | HOOK_VSRAM_W)) linear += VDP_BP_VSRAM;
+        if (matchBreakpoint(type, linear)) firePause(lastPc_);
     }
 }
 
@@ -430,12 +445,77 @@ void GpgxBackend::firePause(uint32_t pc)
 
 bool GpgxBackend::matchBreakpoint(int type, uint32_t addr)
 {
-    std::lock_guard<std::mutex> lk(bpMutex_);
-    for (const auto& bp : breakpoints_) {
-        if (!bp.enabled) continue;
-        if (bp.type == BpType::PC    && (type & HOOK_M68K_E) && addr >= bp.start && addr <= bp.end) return true;
-        if (bp.type == BpType::Read  && (type & HOOK_M68K_R) && addr >= bp.start && addr <= bp.end) return true;
-        if (bp.type == BpType::Write && (type & HOOK_M68K_W) && addr >= bp.start && addr <= bp.end) return true;
+    // A VDP access carries an address in the VDP linear space, so it may only
+    // match breakpoints marked is_vdp — and a bus breakpoint must never be
+    // triggered by one. Without this the two address spaces alias and VDP
+    // breakpoints fire on unrelated RAM.
+    const bool vdpAccess = (type & (HOOK_VRAM_R | HOOK_VRAM_W |
+                                    HOOK_CRAM_R | HOOK_CRAM_W |
+                                    HOOK_VSRAM_R | HOOK_VSRAM_W)) != 0;
+
+    const bool isRead  = (type & (HOOK_M68K_R | HOOK_VRAM_R | HOOK_CRAM_R | HOOK_VSRAM_R)) != 0;
+    const bool isWrite = (type & (HOOK_M68K_W | HOOK_VRAM_W | HOOK_CRAM_W | HOOK_VSRAM_W)) != 0;
+    const bool isExec  = (type & HOOK_M68K_E) != 0;
+
+    // Collect matches under the lock, evaluate conditions outside it: the
+    // evaluator calls into the client (IDA), which must not be done while
+    // holding a lock the client's own thread may end up waiting on.
+    std::vector<std::pair<uint32_t, std::string>> pending;   // elang + expression
+    {
+        std::lock_guard<std::mutex> lk(bpMutex_);
+        for (const auto& bp : breakpoints_) {
+            if (!bp.enabled) continue;
+            if (bp.is_vdp != vdpAccess) continue;
+            const bool typeOk = (bp.type == BpType::PC    && isExec)
+                             || (bp.type == BpType::Read  && isRead)
+                             || (bp.type == BpType::Write && isWrite);
+            if (!typeOk) continue;
+            if (addr < bp.start || addr > bp.end) continue;
+
+            if (bp.condition.empty()) return true;          // unconditional: done
+            pending.emplace_back(bp.elang, bp.condition);
+        }
     }
+
+    if (pending.empty()) return false;
+    if (!condEval_) return true;    // nobody can judge the condition; err on stopping
+
+    for (const auto& c : pending)
+        if (condEval_(c.first, c.second)) return true;
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// Callstack — the same heuristic the original Gens used: push the address of
+// each jsr/bsr, pop on rts/rte. Conditional returns are popped unconditionally,
+// so it can drift; it is a navigation aid, not ground truth.
+// ---------------------------------------------------------------------------
+uint16_t GpgxBackend::opcodeAt(uint32_t pc) const
+{
+    const cpu_memory_map* map = &m68k.memory_map[(pc >> 16) & 0xFF];
+    if (!map->base) return 0;
+    // storage is word-swapped on LE hosts: logical hi byte lives at addr^1
+    return uint16_t((map->base[(pc & 0xFFFF) ^ 1] << 8) | map->base[((pc + 1) & 0xFFFF) ^ 1]);
+}
+
+void GpgxBackend::trackCall(uint32_t pc)
+{
+    const uint16_t opc = opcodeAt(pc);
+    const bool isCall   = ((opc & 0xFFC0) == 0x4E80)      // jsr
+                       || ((opc & 0xFF00) == 0x6100);     // bsr
+    const bool isReturn = (opc == 0x4E75) || (opc == 0x4E73);  // rts / rte
+    if (!isCall && !isReturn) return;
+
+    std::lock_guard<std::mutex> lk(callstackMutex_);
+    if (isCall) {
+        if (callstack_.size() < 256) callstack_.push_back(pc);   // runaway guard
+    } else if (!callstack_.empty()) {
+        callstack_.pop_back();
+    }
+}
+
+std::vector<uint32_t> GpgxBackend::getCallstack()
+{
+    std::lock_guard<std::mutex> lk(callstackMutex_);
+    return callstack_;
 }

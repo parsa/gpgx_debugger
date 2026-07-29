@@ -32,6 +32,8 @@ struct VdpState {
     uint16_t status;
     uint32_t dma_len, dma_src;
     uint8_t  dma_type;     // 0=VRAM fill, 1=VRAM copy, 2=bus->VRAM/CRAM/VSRAM
+    uint16_t vdp_addr;     // pending access: address register
+    uint8_t  vdp_code;     // pending access: code register (low nibble = target)
     const uint8_t* vram;   // 0x10000 bytes – points into gpgx globals
     const uint8_t* cram;   // 0x80 bytes (64 colors)
     const uint8_t* vsram;  // 0x80 bytes (40 x 11-bit)
@@ -90,6 +92,11 @@ enum PadButton : uint16_t {
     PAD_MODE  = 0x0800,
 };
 
+// VDP memories share one linear space for breakpoints, matching what the IDA
+// plugin maps its pseudo-segments onto: VRAM at 0, CRAM at +0x10000,
+// VSRAM at +0x20000. A breakpoint with is_vdp set is an address in here.
+enum : uint32_t { VDP_BP_VRAM = 0x00000, VDP_BP_CRAM = 0x10000, VDP_BP_VSRAM = 0x20000 };
+
 enum class BpType : uint8_t { PC = 1, Read = 2, Write = 3 };
 
 struct Breakpoint {
@@ -100,4 +107,5 @@ struct Breakpoint {
     uint32_t start   = 0;
     uint32_t end     = 0;
     std::string condition;
+    uint32_t elang   = 0;   // which client language `condition` is written in
 };

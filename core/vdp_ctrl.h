@@ -109,6 +109,12 @@ extern unsigned int vdp_hvc_r(unsigned int cycles);
 extern void vdp_test_w(unsigned int data);
 extern int vdp_68k_irq_ack(int int_level);
 
+#ifdef HOOK_CPU
+/* Debugger: pending VDP access (address register + code register) */
+extern void vdp_debug_get_access(unsigned int *out_addr, unsigned int *out_code);
+#endif
+
+
 #ifdef __cplusplus
 }
 #endif

@@ -142,6 +142,16 @@ static uint8 pending;           /* Pending write flag */
 static uint8 code;              /* Code register */
 static uint16 addr;             /* Address register */
 static uint16 addr_latch;       /* Latched A15, A14 of address */
+
+#ifdef HOOK_CPU
+/* The pending VDP access, for the debugger: which memory the next data-port
+   write lands in and where. Both are file-static, hence this accessor. */
+void vdp_debug_get_access(unsigned int *out_addr, unsigned int *out_code)
+{
+  if (out_addr) *out_addr = addr;
+  if (out_code) *out_code = code;
+}
+#endif
 static uint16 sat_base_mask;    /* Base bits of SAT */
 static uint16 sat_addr_mask;    /* Index bits of SAT */
 static uint16 dma_src;          /* DMA source address */
@@ -2288,7 +2298,6 @@ static void vdp_bus_w(unsigned int data)
         cpu_hook(HOOK_VRAM_W, 2, addr, data);
 #endif
 
-      check_breakpoint(BPT_VRAM_W, 2, addr, data);
 #ifdef LOGVDP
       error("[%d(%d)][%d(%d)] VRAM 0x%.4x write -> 0x%.4x (pc: 0x%.6x)\n", v_counter, (v_counter + (m68k.cycles - mcycles_vdp)/MCYCLES_PER_LINE)%lines_per_frame, m68k.cycles, m68k.cycles%MCYCLES_PER_LINE, addr, data, m68k_get_reg(M68K_REG_PC));
 #endif
@@ -2338,7 +2347,6 @@ static void vdp_bus_w(unsigned int data)
         cpu_hook(HOOK_CRAM_W, 2, addr, data);
 #endif
 
-      check_breakpoint(BPT_CRAM_W, 2, addr, data);
 #ifdef LOGVDP
       error("[%d(%d)][%d(%d)] CRAM 0x%.2x write -> 0x%.4x (pc: 0x%.6x)\n", v_counter, (v_counter + (m68k.cycles - mcycles_vdp)/MCYCLES_PER_LINE)%lines_per_frame, m68k.cycles, m68k.cycles%MCYCLES_PER_LINE, addr, data, m68k_get_reg(M68K_REG_PC));
 #endif
@@ -2365,7 +2373,6 @@ static void vdp_bus_w(unsigned int data)
         cpu_hook(HOOK_VSRAM_W, 2, addr, data);
 #endif
 
-      check_breakpoint(BPT_VSRAM_W, 2, addr, data);
 #ifdef LOGVDP
       error("[%d(%d)][%d(%d)] VSRAM 0x%.2x write -> 0x%.4x (pc: %.6x)\n", v_counter, (v_counter + (m68k.cycles - mcycles_vdp)/MCYCLES_PER_LINE)%lines_per_frame, m68k.cycles, m68k.cycles%MCYCLES_PER_LINE, addr, data, m68k_get_reg(M68K_REG_PC));
 #endif
@@ -2577,7 +2584,6 @@ static unsigned int vdp_68k_data_r_m5(void)
         cpu_hook(HOOK_VRAM_R, 2, addr, data);
 #endif
 
-      check_breakpoint(BPT_VRAM_R, 2, addr, data);
 #ifdef LOGVDP
       error("[%d(%d)][%d(%d)] VRAM 0x%.4x read -> 0x%.4x (pc: 0x%.6x)\n", v_counter, (v_counter + (m68k.cycles - mcycles_vdp)/MCYCLES_PER_LINE)%lines_per_frame, m68k.cycles, m68k.cycles%MCYCLES_PER_LINE, addr, data, m68k_get_reg(M68K_REG_PC));
 #endif
@@ -2607,7 +2613,6 @@ static unsigned int vdp_68k_data_r_m5(void)
         cpu_hook(HOOK_VSRAM_R, 2, addr, data);
 #endif
 
-      check_breakpoint(BPT_VSRAM_R, 2, addr, data);
 #ifdef LOGVDP
       error("[%d(%d)][%d(%d)] VSRAM 0x%.2x read -> 0x%.4x (pc: %.6x)\n", v_counter, (v_counter + (m68k.cycles - mcycles_vdp)/MCYCLES_PER_LINE)%lines_per_frame, m68k.cycles, m68k.cycles%MCYCLES_PER_LINE, addr, data, m68k_get_reg(M68K_REG_PC));
 #endif
@@ -2630,7 +2635,6 @@ static unsigned int vdp_68k_data_r_m5(void)
         cpu_hook(HOOK_CRAM_R, 2, addr, data);
 #endif
 
-      check_breakpoint(BPT_CRAM_R, 2, addr, data);
 #ifdef LOGVDP
       error("[%d(%d)][%d(%d)] CRAM 0x%.2x read -> 0x%.4x (pc: %.6x)\n", v_counter, (v_counter + (m68k.cycles - mcycles_vdp)/MCYCLES_PER_LINE)%lines_per_frame, m68k.cycles, m68k.cycles%MCYCLES_PER_LINE, addr, data, m68k_get_reg(M68K_REG_PC));
 #endif
@@ -2650,7 +2654,6 @@ static unsigned int vdp_68k_data_r_m5(void)
         cpu_hook(HOOK_VRAM_R, 2, addr, data);
 #endif
 
-      check_breakpoint(BPT_VRAM_R, 2, addr, data);
 #ifdef LOGVDP
       error("[%d(%d)][%d(%d)] 8-bit VRAM 0x%.4x read -> 0x%.4x (pc: %.6x)\n", v_counter, (v_counter + (m68k.cycles - mcycles_vdp)/MCYCLES_PER_LINE)%lines_per_frame, m68k.cycles, m68k.cycles%MCYCLES_PER_LINE, addr, data, m68k_get_reg(M68K_REG_PC));
 #endif

@@ -23,6 +23,7 @@
 #include <auto.hpp>
 #include <loader.hpp>
 #include <segment.hpp>
+#include <expr.hpp>
 
 // emulator (NO Qt here)
 #include "debugger/EmuHost.h"
@@ -168,6 +169,48 @@ void on_emu_event(const DebugEvent& ev)
 }
 
 // ---------------------------------------------------------------------------
+// Breakpoint conditions
+//
+// The expression is IDA's (IDC or Python), so IDA must evaluate it — and only
+// on its own thread. We are called from the emulation thread while it is
+// stopped at the breakpoint, so execute_sync is safe here: the emulator is not
+// holding anything IDA needs.
+// ---------------------------------------------------------------------------
+struct eval_cond_req : public exec_request_t {
+    uint32_t    elang;
+    std::string expr;
+    bool        result = true;      // on any failure, stop rather than skip
+    eval_cond_req(uint32_t l, std::string e) : elang(l), expr(std::move(e)) {}
+
+    ssize_t idaapi execute() override {
+        const extlang_object_t el = find_extlang_by_index(int(elang));
+        qstring errbuf;
+        idc_value_t rv;
+        bool ok = false;
+        if (el != nullptr)
+            ok = el->eval_expr(&rv, BADADDR, expr.c_str(), &errbuf);
+        else
+            ok = eval_idc_expr(&rv, BADADDR, expr.c_str(), &errbuf);   // default: IDC
+
+        if (!ok) {
+            msg(PLUGIN_NAME ": breakpoint condition failed to evaluate: %s\n",
+                errbuf.empty() ? "unknown error" : errbuf.c_str());
+            result = true;          // a broken condition must not hide the hit
+            return 0;
+        }
+        result = (rv.num != 0);
+        return 0;
+    }
+};
+
+bool evaluate_condition(uint32_t elang, const std::string& expr)
+{
+    eval_cond_req req(elang, expr);
+    execute_sync(req, MFF_WRITE);
+    return req.result;
+}
+
+// ---------------------------------------------------------------------------
 // memory routing: side-effect-free reads via typed regions
 // (never touches IO read handlers; unmapped bytes read as 0, like Gens)
 // ---------------------------------------------------------------------------
@@ -301,7 +344,16 @@ drc_t read_registers(int clsmask, regval_t* values)
         VdpState v = be->getVdpState();
         values[R_VDP_DMA_LEN].ival = v.dma_len;
         values[R_VDP_DMA_SRC].ival = (v.dma_src << 1) & 0xFFFFFF;
-        values[R_VDP_WRITE_ADDR].ival = BREAKPOINTS_BASE;  // TODO: expose VDP addr latch (Ctrl.Address) for exact dst
+        // Where the next data-port write lands, as an address IDA can follow
+        // into the VDP pseudo-segments.
+        uint32_t dst = BREAKPOINTS_BASE;
+        switch (v.vdp_code & 0x0F) {
+        case 0x1: dst += VDP_BP_VRAM  + v.vdp_addr; break;   // VRAM write
+        case 0x3: dst += VDP_BP_CRAM  + v.vdp_addr; break;   // CRAM write
+        case 0x5: dst += VDP_BP_VSRAM + v.vdp_addr; break;   // VSRAM write
+        default:  break;                                     // reads/idle: base
+        }
+        values[R_VDP_WRITE_ADDR].ival = dst;
     }
     if (clsmask & RC_VDP) {
         VdpState v = be->getVdpState();
@@ -359,13 +411,20 @@ void translate_bpt(ea_t ea, int size, bpttype_t itype,
     end   &= 0xFFFFFF;
 }
 
-void add_one_bpt(uint8_t type, uint8_t vdp, uint32_t start, uint32_t end)
+void add_one_bpt(uint8_t type, uint8_t vdp, uint32_t start, uint32_t end, ea_t ida_ea)
 {
     Breakpoint bp;
     bp.type   = (BpType)type;
     bp.is_vdp = vdp != 0;
     bp.start  = start;
     bp.end    = end;
+    // Conditions stay in IDA's language; we only carry them, and ask IDA to
+    // judge them when the breakpoint is hit.
+    bpt_t ibp;
+    if (get_bpt(ida_ea, &ibp) && !ibp.cndbody.empty()) {
+        bp.condition = ibp.cndbody.c_str();
+        bp.elang     = uint32_t(ibp.get_cnd_elang_idx());
+    }
     int id = g_host->backend()->addBreakpoint(bp);
     g_bpIds[BpKey{type, vdp, start, end}] = id;
 }
@@ -387,8 +446,8 @@ drc_t update_bpts(int* nbpts, update_bpt_info_t* bpts, int nadd, int ndel)
         if (bpts[i].code == BPT_SKIP) continue;
         uint8_t t1, t2, vdp; uint32_t s, e;
         translate_bpt(bpts[i].ea, (int)bpts[i].size, bpts[i].type, t1, t2, vdp, s, e);
-        add_one_bpt(t1, vdp, s, e);
-        if (t2) add_one_bpt(t2, vdp, s, e);
+        add_one_bpt(t1, vdp, s, e, bpts[i].ea);
+        if (t2) add_one_bpt(t2, vdp, s, e, bpts[i].ea);
         bpts[i].code = BPT_OK;
         ++ok;
     }
@@ -425,6 +484,7 @@ drc_t start_process(const char* path, const char* input_path)
     { std::lock_guard<std::mutex> lk(g_events.mx); g_events.q.clear(); }
 
     g_host->setEventSink(on_emu_event);
+    g_host->backend()->setConditionEvaluator(evaluate_condition);
 #ifdef SMD_DGX_IDA_VIEWS
     g_host->setFrameSink(smd_dgx_push_frame);   // no-op unless the Screen dock is open
 #endif
@@ -648,9 +708,22 @@ ssize_t idaapi debugger_callback(void*, int msgid, va_list va)
 
     // Callstack: deferred (backend does not track it yet) — DRC_NONE keeps
     // IDA's default behavior.
-    case debugger_t::ev_update_call_stack:
-        retcode = DRC_NONE;
+    case debugger_t::ev_update_call_stack: {
+        thid_t tid = va_argi(va, thid_t);   (void)tid;
+        call_stack_t* trace = va_arg(va, call_stack_t*);
+        if (!g_host || !trace) { retcode = DRC_NONE; break; }
+        trace->clear();
+        // Backend order is outermost-first, which is what IDA expects.
+        for (uint32_t ea : g_host->backend()->getCallstack()) {
+            call_stack_info_t& f = trace->push_back();
+            f.callea = ea;
+            f.funcea = BADADDR;
+            f.fp     = BADADDR;
+            f.funcok = true;
+        }
+        retcode = DRC_OK;
         break;
+    }
 
     default:
         retcode = DRC_NONE;
