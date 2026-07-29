@@ -21,8 +21,17 @@ gx_add_core(gx_core "${GX_ROOT}")
 
 target_link_libraries(gx_core PUBLIC gx_platform)
 
-find_package(ZLIB REQUIRED)
-target_link_libraries(gx_core PRIVATE ZLIB::ZLIB)
+# zlib: build the copy already vendored in the emulator tree (libchdr deps)
+# instead of an external one. Keeps every artifact self-contained — the IDA
+# plugin in particular must not depend on a zlib1.dll that IDA does not ship —
+# and drops one platform dependency.
+file(GLOB GX_ZLIB_SOURCES "${GX_ROOT}/core/cd_hw/libchdr/deps/zlib-1.3.1/*.c")
+add_library(gx_zlib STATIC ${GX_ZLIB_SOURCES})
+target_include_directories(gx_zlib PUBLIC "${GX_ROOT}/core/cd_hw/libchdr/deps/zlib-1.3.1")
+target_compile_definitions(gx_zlib PRIVATE _CRT_SECURE_NO_WARNINGS)
+add_library(ZLIB::ZLIB ALIAS gx_zlib)
+
+target_link_libraries(gx_core PRIVATE gx_zlib)
 
 if (GX_ENABLE_CHD)
   gx_add_libchdr(gx_libchdr "${GX_ROOT}")
@@ -40,7 +49,7 @@ add_library(frontend_common STATIC
   "${CMAKE_CURRENT_LIST_DIR}/frontends/sdl/unzip.c"
 )
 target_include_directories(frontend_common PUBLIC "${GX_FRONTEND_CORE}")
-target_link_libraries(frontend_common PRIVATE gx_core ZLIB::ZLIB)
+target_link_libraries(frontend_common PRIVATE gx_core gx_zlib)
 set_target_properties(frontend_common PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
 # std::filesystem may require explicit link on some toolchains (e.g. GCC with libstdc++)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL ""))
