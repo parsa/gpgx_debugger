@@ -36,6 +36,7 @@ add_library(smd_dgx_ida SHARED
   smd_dgx_ida.cpp
   ida_input.c          # headless input stub (osd_input_update -> no-op)
   ida_registers.h
+  $<$<BOOL:${WIN32}>:${CMAKE_CURRENT_LIST_DIR}/../platform/AudioOutput.cpp>
 )
 target_include_directories(smd_dgx_ida PRIVATE
   "${IDA_SDK_DIR}/include"
@@ -45,7 +46,8 @@ target_compile_definitions(smd_dgx_ida PRIVATE
   __NT__ __X64__ __EA64__
   NO_OBSOLETE_FUNCS
 )
-target_link_libraries(smd_dgx_ida PRIVATE smd_dgx_emu "${IDA_LIB}")
+target_link_libraries(smd_dgx_ida PRIVATE smd_dgx_emu "${IDA_LIB}"
+  $<$<BOOL:${WIN32}>:winmm>)   # AudioOutput (waveOut)
 set_target_properties(smd_dgx_ida PROPERTIES
   CXX_STANDARD 20
   CXX_STANDARD_REQUIRED YES

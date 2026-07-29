@@ -31,6 +31,11 @@ public:
     virtual std::vector<uint8_t>    readRegion(int id, uint32_t off, uint32_t size) = 0;
     virtual bool                    writeRegion(int id, uint32_t off, const uint8_t* data, uint32_t size) = 0;
 
+    // Controller input: a PadButton mask per port. Safe to call from any
+    // thread — the core reads the pad once per frame.
+    virtual void     setPad(int port, uint16_t buttons) = 0;
+    virtual uint16_t getPad(int port) = 0;
+
     // Breakpoints
     virtual int  addBreakpoint(const Breakpoint&) = 0;
     virtual void removeBreakpoint(int id) = 0;

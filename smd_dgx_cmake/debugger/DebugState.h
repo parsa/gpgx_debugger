@@ -16,11 +16,17 @@ struct Z80Regs {
     uint8_t  i, r, im, iff1, iff2, halt;
 };
 
-// Byte-order contract for raw pointers below (LSB_FIRST build):
-//   vram / sat : logical Genesis byte at address A lives at ptr[A ^ 1]
-//                (the core stores VDP words as host little-endian).
-//   cram / vsram: read per-entry as 16-bit LE (lo | hi<<8) — no extra XOR.
-//   CRAM entry format: 0000 BBB0 GGG0 RRR0 (bits 1-3 R, 5-7 G, 9-11 B).
+// Byte-order contract for the raw pointers below (LSB_FIRST build). The core
+// accesses all of these as native uint16/uint32 words, so on a little-endian
+// host the two bytes of every word are stored in reverse:
+//   vram / sat  : the logical Genesis byte at address A lives at ptr[A ^ 1].
+//   cram / vsram: read per entry as a native 16-bit word, lo | (hi << 8).
+//
+// CRAM entries are NOT in the 16-bit bus format 0000BBB0GGG0RRR0. The core
+// packs them on write (vdp_ctrl.c, "Pack 16-bit bus data ... to 9-bit CRAM
+// data") into 9 bits, BBBGGGRRR — red in the low bits. Decode with
+// cram_to_rgb() below; decoding a packed entry as bus data scrambles the
+// channels (which is exactly what it looks like: wrong colors everywhere).
 struct VdpState {
     uint8_t  reg[0x20];
     uint16_t status;
@@ -48,6 +54,40 @@ struct MemRegion {
     uint32_t    base;      // display base address (e.g. 0xFF0000 for 68K RAM)
     uint32_t    size;      // bytes
     bool        writable;
+};
+
+// CRAM entry (packed 9-bit BBBGGGRRR) <-> 8-bit per channel.
+// 3 bits scale to 0..224 (v << 5), the same range the original Gens tools
+// displayed, so screenshots stay comparable.
+inline void cram_to_rgb(uint16_t packed, int& r, int& g, int& b)
+{
+    r = ((packed >> 0) & 7) << 5;
+    g = ((packed >> 3) & 7) << 5;
+    b = ((packed >> 6) & 7) << 5;
+}
+
+inline uint16_t rgb_to_cram(int r, int g, int b)
+{
+    return static_cast<uint16_t>((((r >> 5) & 7) << 0)
+                               | (((g >> 5) & 7) << 3)
+                               | (((b >> 5) & 7) << 6));
+}
+
+// Controller buttons, as a bitmask for one pad. Mirrors the core's INPUT_*
+// values so UI code never has to include emulator headers.
+enum PadButton : uint16_t {
+    PAD_UP    = 0x0001,
+    PAD_DOWN  = 0x0002,
+    PAD_LEFT  = 0x0004,
+    PAD_RIGHT = 0x0008,
+    PAD_B     = 0x0010,
+    PAD_C     = 0x0020,
+    PAD_A     = 0x0040,
+    PAD_START = 0x0080,
+    PAD_Z     = 0x0100,
+    PAD_Y     = 0x0200,
+    PAD_X     = 0x0400,
+    PAD_MODE  = 0x0800,
 };
 
 enum class BpType : uint8_t { PC = 1, Read = 2, Write = 3 };

@@ -7,6 +7,7 @@ extern "C" {
 #include <vdp_ctrl.h>         // reg[], vram[], cram[], vsram[], sat[], status
 #include <mem68k.h>
 #include <genesis.h>          // work_ram[], zram[], cart macro
+#include <input_hw/input.h>   // t_input input, MAX_DEVICES
 #include <system.h>           // vdp_pal, MCYCLES_PER_LINE
 #include <sound/sound.h>      // fm_debug_regs
 #include <sound/psg.h>        // psg_debug_regs
@@ -128,6 +129,20 @@ bool GpgxBackend::writeMemory(uint32_t addr, const uint8_t* data, uint32_t size)
 }
 
 // ---------------------------------------------------------------------------
+// Controller input
+// ---------------------------------------------------------------------------
+void GpgxBackend::setPad(int port, uint16_t buttons)
+{
+    if (port >= 0 && port < MAX_DEVICES)
+        input.pad[port] = buttons;
+}
+
+uint16_t GpgxBackend::getPad(int port)
+{
+    return (port >= 0 && port < MAX_DEVICES) ? input.pad[port] : 0;
+}
+
+// ---------------------------------------------------------------------------
 // Memory regions (hex editor / RAM tools) — parity with the Gens hex editor
 // ---------------------------------------------------------------------------
 namespace {
@@ -140,8 +155,10 @@ constexpr RegionDesc kRegions[] = {
     { 1, "RAM 68K",   0xFF0000, true,  1 },
     { 2, "RAM Z80",   0xA00000, true,  0 },
     { 3, "VRAM",      0x000000, true,  1 },
-    { 4, "CRAM",      0x000000, true,  1 },
-    { 5, "VSRAM",     0x000000, true,  1 },
+    // CRAM/VSRAM hold core-internal packed words, not Genesis bus bytes, and
+    // the core reads them as native uint16 — expose them raw (see DebugState.h).
+    { 4, "CRAM",      0x000000, true,  0 },
+    { 5, "VSRAM",     0x000000, true,  0 },
     { 6, "Regs M68K", 0x000000, true,  0 },
     { 7, "Regs Z80",  0x000000, false, 0 },
     { 8, "Regs VDP",  0x000000, true,  0 },

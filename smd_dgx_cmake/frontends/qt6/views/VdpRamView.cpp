@@ -288,8 +288,9 @@ void VdpRamView::setStatus(const QString& msg)
 
 QRgb VdpRamView::colorAt(int idx) const
 {
-    const uint16_t c = cram_[idx & 63];
-    return qRgb(((c >> 0) & 0xE) << 4, ((c >> 4) & 0xE) << 4, ((c >> 8) & 0xE) << 4);
+    int r, g, b;
+    cram_to_rgb(cram_[idx & 63], r, g, b);
+    return qRgb(r, g, b);
 }
 
 // -------------------------------------------------------------- rendering
@@ -458,10 +459,11 @@ std::vector<uint8_t> VdpRamView::openFile(const QString& caption, const QString&
 void VdpRamView::onDumpPal()
 {
     // Logical big-endian word order, like the Gens dump.
+    // Same byte order the CRAM region uses, so a dump reloads unchanged.
     uint8_t buf[0x80];
     for (int i = 0; i < 64; ++i) {
-        buf[i * 2]     = static_cast<uint8_t>(cram_[i] >> 8);
-        buf[i * 2 + 1] = static_cast<uint8_t>(cram_[i] & 0xFF);
+        buf[i * 2]     = static_cast<uint8_t>(cram_[i] & 0xFF);
+        buf[i * 2 + 1] = static_cast<uint8_t>(cram_[i] >> 8);
     }
     if (saveFile(QStringLiteral("Dump Palette"), QStringLiteral("pal.bin"),
                  kBinFilter, buf, sizeof buf))
@@ -508,24 +510,21 @@ void VdpRamView::onGrayRnbw()
     }
     // Lines 0-2 only (line 3 untouched): ascending gray, descending gray, rainbow.
     uint8_t buf[96];
-    auto putBE = [&buf](int color, uint16_t w) {
-        buf[color * 2]     = static_cast<uint8_t>(w >> 8);
-        buf[color * 2 + 1] = static_cast<uint8_t>(w & 0xFF);
+    auto putColor = [&buf](int color, uint16_t packed) {   // CRAM region order
+        buf[color * 2]     = static_cast<uint8_t>(packed & 0xFF);
+        buf[color * 2 + 1] = static_cast<uint8_t>(packed >> 8);
     };
     for (int i = 0; i < 16; ++i) {
-        const uint16_t v = static_cast<uint16_t>(i & 0xE);
-        putBE(i, static_cast<uint16_t>(v | (v << 4) | (v << 8)));
+        const int v = (i & 7) << 5;                        // ascending gray
+        putColor(i, rgb_to_cram(v, v, v));
     }
     for (int i = 0; i < 16; ++i) {
-        const uint16_t v = static_cast<uint16_t>((15 - i) & 0xE);
-        putBE(16 + i, static_cast<uint16_t>(v | (v << 4) | (v << 8)));
+        const int v = ((15 - i) & 7) << 5;                 // descending gray
+        putColor(16 + i, rgb_to_cram(v, v, v));
     }
     for (int i = 0; i < 16; ++i) {
         const QColor c = QColor::fromHsvF(float(i) / 16.0f, 0.85f, 1.0f);
-        const uint16_t qR = (c.red()   >> 4) & 0xE;
-        const uint16_t qG = (c.green() >> 4) & 0xE;
-        const uint16_t qB = (c.blue()  >> 4) & 0xE;
-        putBE(32 + i, static_cast<uint16_t>(qR | (qG << 4) | (qB << 8)));
+        putColor(32 + i, rgb_to_cram(c.red(), c.green(), c.blue()));
     }
     if (backend_->writeRegion(cramRegionId_, 0, buf, sizeof buf)) {
         setStatus(QStringLiteral("Gray/rainbow palette set"));

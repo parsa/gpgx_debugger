@@ -26,6 +26,9 @@
 
 // emulator (NO Qt here)
 #include "debugger/EmuHost.h"
+#ifdef _WIN32
+#include "platform/AudioOutput.h"
+#endif
 
 #include "ida_registers.h"
 
@@ -74,6 +77,12 @@ struct BpKey {
     }
 };
 std::map<BpKey, int> g_bpIds;
+
+#ifdef _WIN32
+// Audio device, alive for as long as the emulator runs. Written to from the
+// emulation thread only (via the audio sink), created/destroyed around it.
+AudioOutput* g_audio = nullptr;
+#endif
 
 // ---------------------------------------------------------------------------
 // codemap -> auto_make_code on the main thread
@@ -125,6 +134,11 @@ void on_emu_event(const DebugEvent& ev)
         break;
     }
     case DebugEvent::Type::Paused:
+#ifdef _WIN32
+        // Nothing refills the device while suspended; silence it instead of
+        // letting the last buffers drone on.
+        if (g_audio) g_audio->pause(true);
+#endif
         apply_codemap(ev.changed);
         ida_ev.set_eid(PROCESS_SUSPENDED);
         ida_ev.ea = ev.pc;
@@ -137,6 +151,9 @@ void on_emu_event(const DebugEvent& ev)
         g_events.enqueue(ida_ev);
         break;
     case DebugEvent::Type::Resumed:
+#ifdef _WIN32
+        if (g_audio) g_audio->pause(false);
+#endif
         break;
     }
 }
@@ -382,22 +399,38 @@ drc_t update_bpts(int* nbpts, update_bpt_info_t* bpts, int nadd, int ndel)
 // ---------------------------------------------------------------------------
 // process lifecycle
 // ---------------------------------------------------------------------------
+void stop_audio()
+{
+#ifdef _WIN32
+    delete g_audio;
+    g_audio = nullptr;
+#endif
+}
+
 drc_t start_process(const char* path, const char* input_path)
 {
     delete g_host;
     g_host = new EmuHost();
     g_bpIds.clear();
+    stop_audio();
     { std::lock_guard<std::mutex> lk(g_events.mx); g_events.q.clear(); }
 
     g_host->setEventSink(on_emu_event);
 #ifdef SMD_DGX_IDA_VIEWS
     g_host->setFrameSink(smd_dgx_push_frame);   // no-op unless the Screen dock is open
 #endif
+#ifdef _WIN32
+    g_audio = new AudioOutput();
+    g_host->setAudioSink([](const int16_t* stereo, int frames) {
+        if (g_audio) g_audio->write(stereo, frames);
+    });
+#endif
 
     const char* rom = (input_path && input_path[0]) ? input_path : path;
     if (!g_host->start(rom ? rom : "")) {
         delete g_host;
         g_host = nullptr;
+        stop_audio();
         return DRC_FAILED;
     }
     // start paused at the entry: request a pause right away

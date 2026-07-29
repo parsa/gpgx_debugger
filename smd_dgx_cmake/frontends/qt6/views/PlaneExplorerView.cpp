@@ -196,10 +196,9 @@ void PlaneExplorerView::buildColorTable()
 {
     for (int i = 0; i < 256; ++i) colorTable_[i] = qRgb(0, 0, 0);
     for (int i = 0; i < 64; ++i) {
-        const uint16_t c = cw(i);
-        colorTable_[i] = qRgb(((c >> 0) & 0xE) << 4,
-                              ((c >> 4) & 0xE) << 4,
-                              ((c >> 8) & 0xE) << 4);
+        int r, g, b;
+        cram_to_rgb(cw(i), r, g, b);
+        colorTable_[i] = qRgb(r, g, b);
     }
     colorTable_[253] = qRgb(0x33, 0x33, 0x33);
     colorTable_[254] = qRgb(0x44, 0x44, 0x44);

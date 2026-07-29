@@ -1,5 +1,5 @@
 #include "EmulatorThread.h"
-#include "AudioOutput.h"
+#include "platform/AudioOutput.h"
 #include "views/EmulatorScreen.h"
 #include "debugger/GpgxBackend.h"
 #include "gx/gx.hpp"

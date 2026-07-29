@@ -102,7 +102,7 @@ if (Qt6_FOUND)
     "${GX_PLATFORM_QT6}/MainWindow.cpp"
     "${GX_PLATFORM_QT6}/EmulatorThread.h"
     "${GX_PLATFORM_QT6}/EmulatorThread.cpp"
-    "${GX_PLATFORM_QT6}/AudioOutput.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/platform/AudioOutput.cpp"
     # views (parity set with the Gens debug windows)
     "${GX_PLATFORM_QT6}/views/EmulatorScreen.h"
     "${GX_PLATFORM_QT6}/views/EmulatorScreen.cpp"

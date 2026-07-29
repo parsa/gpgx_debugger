@@ -89,6 +89,13 @@ void EmuHost::run(std::string /*romPath*/)
                        bm.viewport.x, bm.viewport.y, bm.viewport.w, bm.viewport.h);
         }
 
+        if (audioSink_ && snd.enabled && snd.blips[0]) {
+            static int16_t audioBuf[2048 * 2];   // stereo, gx::SOUND_SAMPLES_SIZE
+            const int frames = audio_update(audioBuf);
+            if (frames > 0)
+                audioSink_(audioBuf, frames);
+        }
+
         // Run at console speed. Unpaced, the emulator spins a core flat out for
         // no benefit — a debugger host still wants the game in real time. A
         // pause blocks inside system_frame_gen, so re-baseline once we are

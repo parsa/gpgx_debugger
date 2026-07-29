@@ -214,7 +214,9 @@ QRgb VdpSpritesView::cramColor(int pal, int idx) const
     const int off = (pal * 16 + idx) * 2;
     if (off + 1 >= static_cast<int>(cram_.size())) return qRgb(0, 0, 0);
     const uint16_t c = cram_[off] | (cram_[off + 1] << 8);
-    return qRgb(((c >> 0) & 0xE) << 4, ((c >> 4) & 0xE) << 4, ((c >> 8) & 0xE) << 4);
+    int r, g, b;
+    cram_to_rgb(c, r, g, b);
+    return qRgb(r, g, b);
 }
 
 QImage VdpSpritesView::renderSprite(const Sprite& s, int pal) const

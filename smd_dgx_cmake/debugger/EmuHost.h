@@ -28,6 +28,8 @@ public:
     // headless run.
     using FrameSink = std::function<void(const uint8_t* data, int width, int height, int pitch,
                                          int vpX, int vpY, int vpW, int vpH)>;
+    // Receives one frame's worth of 16-bit stereo samples. Omit for silence.
+    using AudioSink = std::function<void(const int16_t* stereo, int frames)>;
     using EventSink = std::function<void(const DebugEvent&)>;
 
     EmuHost();
@@ -38,6 +40,7 @@ public:
     // null for a pure direct-access host.
     void setTransport(IDebugTransport* t) { transport_ = t; }
     void setFrameSink(FrameSink s) { frameSink_ = std::move(s); }
+    void setAudioSink(AudioSink s) { audioSink_ = std::move(s); }
     void setEventSink(EventSink s) { eventSink_ = std::move(s); }
 
     // Direct access for in-proc hosts (synchronous reads/writes; call while
@@ -67,6 +70,7 @@ private:
     GpgxBackend       backend_;
     IDebugTransport*  transport_ = nullptr;
     FrameSink         frameSink_;
+    AudioSink         audioSink_;
     EventSink         eventSink_;
 
     std::thread       thread_;
