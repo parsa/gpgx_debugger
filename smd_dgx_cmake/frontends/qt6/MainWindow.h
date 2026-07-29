@@ -9,6 +9,7 @@
 class EmulatorScreen;
 class EmuHost;
 class AudioOutput;
+class BridgeServer;
 class GpgxBackend;
 class VdpRamView;
 class VdpRegView;
@@ -53,6 +54,7 @@ private:
     EmulatorScreen*   screen_    = nullptr;
     EmuHost*          emuHost_ = nullptr;
     AudioOutput*      audio_   = nullptr;
+    BridgeServer*     bridge_  = nullptr;
     QTimer            refreshTimer_;
 
     VdpRamView*        vdpRamView_    = nullptr;

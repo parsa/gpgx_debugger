@@ -45,7 +45,10 @@ public:
     void setTransport(IDebugTransport* t) { transport_ = t; }
     void setFrameSink(FrameSink s) { frameSink_ = std::move(s); }
     void setAudioSink(AudioSink s) { audioSink_ = std::move(s); }
-    void setEventSink(EventSink s) { eventSink_ = std::move(s); }
+    // Several consumers now: the IDA plugin turns events into debug_event_t,
+    // the bridge queues them for attached clients. Sinks run on the EMULATION
+    // thread — keep them short and never call back into run control.
+    void addEventSink(EventSink s);
 
     // Direct access for in-proc hosts (synchronous reads/writes; call while
     // paused). Never null after construction.
@@ -87,7 +90,8 @@ private:
     IDebugTransport*  transport_ = nullptr;
     FrameSink         frameSink_;
     AudioSink         audioSink_;
-    EventSink         eventSink_;
+    std::mutex             sinkMx_;
+    std::vector<EventSink> eventSinks_;
 
     std::thread       thread_;
     std::atomic<bool> stopFlag_ { false };

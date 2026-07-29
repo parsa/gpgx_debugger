@@ -1,22 +1,35 @@
 #pragma once
 #include <atomic>
+#include <condition_variable>
+#include <cstdint>
+#include <deque>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 class EmuHost;
 
-// Localhost control socket over an EmuHost. Exists so an external agent (the
-// Python MCP server) can drive the *same* emulator session the user is looking
-// at, rather than a private copy.
+// Localhost control socket over an EmuHost. Exists so something outside this
+// process — the Python MCP server, or a second IDA instance holding the Z80
+// database — drives the *same* emulator session the user is looking at rather
+// than a private copy.
 //
-// The wire format is deliberately dumb — one request per line, one response
-// per line, "ok ..." or "err ..." — so this side needs no JSON library and no
-// dependencies beyond sockets. All structure lives in the Python server.
+// The wire format is deliberately dumb: one request per line, one response per
+// line, "ok ..." or "err ...". No JSON library, no dependency beyond sockets;
+// all structure lives in the client.
 //
-// Threading: the server runs on its own thread and serves one client at a
-// time. Reads go straight to the backend (racy-but-benign while running,
-// exact while paused, same contract as the debug views); anything that must
-// not race the core is routed through EmuHost::invoke().
+// Threading: one thread accepts, one thread per client. Commands are NOT
+// serialised against each other — the backend guards its own state, reads are
+// racy-but-benign exactly as the debug views are, and anything that must not
+// race the core goes through EmuHost::invoke(). A single lock around command
+// handling would be simpler but would let one client's save-state block every
+// other client for the length of a frame.
+//
+// Events are polled, not pushed (`events`), because a line protocol has no way
+// to interleave unsolicited output with responses. Each client gets its own
+// queue and sees events from the moment it connected.
 class BridgeServer {
 public:
     explicit BridgeServer(EmuHost* host) : host_(host) {}
@@ -28,8 +41,24 @@ public:
     unsigned short port() const { return port_; }
 
 private:
-    void serve();
-    std::string handle(const std::string& line);
+    struct QueuedEvent {
+        uint64_t seq;
+        uint8_t  type;      // DebugEvent::Type
+        uint8_t  cpu;       // Cpu
+        uint32_t pc;
+    };
+
+    struct Client {
+        long long fd = -1;
+        std::deque<QueuedEvent> events;
+        uint64_t dropped = 0;       // overflowed events; reported once, then cleared
+    };
+
+    void serve();                                   // accept loop
+    void serveClient(std::shared_ptr<Client> c);    // one connection
+    std::string handle(const std::string& line, Client& c);
+    std::string handleEvents(Client& c, int max);
+    void onEmuEvent(const void* ev);                // DebugEvent, type-erased for the header
 
     EmuHost*          host_ = nullptr;
     std::thread       thread_;
@@ -37,4 +66,9 @@ private:
     std::atomic<bool> stopFlag_{ false };
     unsigned short    port_ = 0;
     long long         listenFd_ = -1;
+
+    std::mutex                            clientsMx_;
+    std::vector<std::shared_ptr<Client>>  clients_;
+    std::vector<std::thread>              clientThreads_;
+    uint64_t                              nextSeq_ = 1;
 };

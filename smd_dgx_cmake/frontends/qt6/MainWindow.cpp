@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "debugger/EmuHost.h"
 #include "platform/AudioOutput.h"
+#include "debugger/BridgeServer.h"
 #include "views/EmulatorScreen.h"
 #include "views/VdpRamView.h"
 #include "views/VdpRegView.h"
@@ -59,6 +60,8 @@ MainWindow::~MainWindow() { stopEmulator(); }
 
 void MainWindow::stopEmulator()
 {
+    // Before the host: the bridge's handlers hold an EmuHost*.
+    delete bridge_; bridge_ = nullptr;
     if (emuHost_) { emuHost_->stop(); delete emuHost_; emuHost_ = nullptr; }
     delete audio_; audio_ = nullptr;      // outlives the host: the sink writes to it
 }
@@ -190,6 +193,12 @@ void MainWindow::openRomFile(const QString& path)
 
     // States live beside the ROM here; the IDA host puts them beside the database.
     statesView_->setStatesDir(fi.dir().filePath(fi.completeBaseName() + QStringLiteral("_states")));
+
+    // Same control socket the IDA plugin serves, so the MCP tools work against
+    // the standalone app too.
+    bridge_ = new BridgeServer(emuHost_);
+    if (!bridge_->start())
+        qWarning("SMD DGX: control socket unavailable (port busy?)");
 
     refreshTimer_.start();
     statusLabel_->setText(QStringLiteral("Running: ") + path);

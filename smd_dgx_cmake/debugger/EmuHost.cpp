@@ -211,8 +211,17 @@ void EmuHost::copyViewport(std::vector<uint8_t>& out, int& w, int& h) const
     }
 }
 
+void EmuHost::addEventSink(EventSink s)
+{
+    if (!s) return;
+    std::lock_guard<std::mutex> lk(sinkMx_);
+    eventSinks_.push_back(std::move(s));
+}
+
 void EmuHost::emitEvent(const DebugEvent& ev)
 {
     if (transport_) transport_->sendEvent(ev);
-    if (eventSink_) eventSink_(ev);
+    std::vector<EventSink> sinks;
+    { std::lock_guard<std::mutex> lk(sinkMx_); sinks = eventSinks_; }
+    for (const auto& s : sinks) s(ev);      // copied: a sink may outlive the lock
 }

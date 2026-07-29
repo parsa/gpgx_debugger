@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <sstream>
+#include <memory>
 #include <vector>
 
 #ifdef _WIN32
@@ -103,7 +104,7 @@ bool BridgeServer::start(unsigned short port)
     // from another host.
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-    if (::bind(fd, (sockaddr*)&addr, sizeof addr) != 0 || ::listen(fd, 1) != 0) {
+    if (::bind(fd, (sockaddr*)&addr, sizeof addr) != 0 || ::listen(fd, 4) != 0) {
         CLOSESOCK(fd);
         return false;
     }
@@ -111,6 +112,7 @@ bool BridgeServer::start(unsigned short port)
     listenFd_ = static_cast<long long>(fd);
     port_     = port;
     running_.store(true);
+    host_->addEventSink([this](const DebugEvent& ev) { onEmuEvent(&ev); });
     thread_   = std::thread(&BridgeServer::serve, this);
     return true;
 }
@@ -123,7 +125,17 @@ void BridgeServer::stop()
         CLOSESOCK(static_cast<socket_t>(listenFd_));   // unblocks accept()
         listenFd_ = -1;
     }
+    // Close the client sockets so their recv() returns and the threads exit;
+    // otherwise a connected debugger keeps this object alive past the host.
+    {
+        std::lock_guard<std::mutex> lk(clientsMx_);
+        for (auto& c : clients_)
+            if (c->fd >= 0) CLOSESOCK(static_cast<socket_t>(c->fd));
+    }
     thread_.join();
+    for (auto& t : clientThreads_) if (t.joinable()) t.join();
+    clientThreads_.clear();
+    { std::lock_guard<std::mutex> lk(clientsMx_); clients_.clear(); }
     running_.store(false);
 #ifdef _WIN32
     WSACleanup();
@@ -133,38 +145,97 @@ void BridgeServer::stop()
 void BridgeServer::serve()
 {
     while (!stopFlag_.load()) {
-        socket_t client = ::accept(static_cast<socket_t>(listenFd_), nullptr, nullptr);
-        if (client == BAD_SOCK) break;               // listener closed by stop()
+        socket_t fd = ::accept(static_cast<socket_t>(listenFd_), nullptr, nullptr);
+        if (fd == BAD_SOCK) break;               // listener closed by stop()
 
-        std::string buf;
-        char chunk[4096];
-        while (!stopFlag_.load()) {
-            const int n = ::recv(client, chunk, sizeof chunk, 0);
-            if (n <= 0) break;
-            buf.append(chunk, n);
-
-            size_t nl;
-            while ((nl = buf.find('\n')) != std::string::npos) {
-                std::string line = buf.substr(0, nl);
-                buf.erase(0, nl + 1);
-                if (!line.empty() && line.back() == '\r') line.pop_back();
-
-                std::string reply = handle(line);
-                reply += '\n';
-                size_t sent = 0;
-                while (sent < reply.size()) {
-                    const int w = ::send(client, reply.data() + sent, (int)(reply.size() - sent), 0);
-                    if (w <= 0) { sent = reply.size(); break; }
-                    sent += w;
-                }
-            }
+        auto c = std::make_shared<Client>();
+        c->fd = static_cast<long long>(fd);
+        {
+            std::lock_guard<std::mutex> lk(clientsMx_);
+            clients_.push_back(c);
+            clientThreads_.emplace_back(&BridgeServer::serveClient, this, c);
         }
-        CLOSESOCK(client);
     }
 }
 
+void BridgeServer::serveClient(std::shared_ptr<Client> c)
+{
+    const socket_t fd = static_cast<socket_t>(c->fd);
+    std::string buf;
+    char chunk[4096];
+
+    while (!stopFlag_.load()) {
+        const int n = ::recv(fd, chunk, sizeof chunk, 0);
+        if (n <= 0) break;
+        buf.append(chunk, n);
+
+        size_t nl;
+        while ((nl = buf.find('\n')) != std::string::npos) {
+            std::string line = buf.substr(0, nl);
+            buf.erase(0, nl + 1);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+
+            std::string reply = handle(line, *c);
+            reply += '\n';
+            size_t sent = 0;
+            while (sent < reply.size()) {
+                const int w = ::send(fd, reply.data() + sent, (int)(reply.size() - sent), 0);
+                if (w <= 0) { sent = reply.size(); break; }
+                sent += w;
+            }
+        }
+    }
+
+    CLOSESOCK(fd);
+    std::lock_guard<std::mutex> lk(clientsMx_);
+    for (size_t i = 0; i < clients_.size(); ++i)
+        if (clients_[i] == c) { clients_.erase(clients_.begin() + i); break; }
+}
+
+// Runs on the EMULATION thread. Queue and return — never touch the backend
+// from here, and never block: the emulator is waiting on us.
+void BridgeServer::onEmuEvent(const void* evp)
+{
+    const DebugEvent& ev = *static_cast<const DebugEvent*>(evp);
+    std::lock_guard<std::mutex> lk(clientsMx_);
+    const uint64_t seq = nextSeq_++;
+    for (auto& c : clients_) {
+        if (c->events.size() >= 256) { c->events.pop_front(); ++c->dropped; }
+        c->events.push_back(QueuedEvent{ seq, uint8_t(ev.type), uint8_t(ev.cpu), ev.pc });
+    }
+}
+
+std::string BridgeServer::handleEvents(Client& c, int max)
+{
+    std::lock_guard<std::mutex> lk(clientsMx_);
+    std::ostringstream o;
+    std::vector<std::string> tuples;
+
+    if (c.dropped) {                       // tell the client it missed some
+        std::ostringstream d;
+        d << "0,dropped," << std::dec << c.dropped << ",-";
+        tuples.push_back(d.str());
+        c.dropped = 0;
+    }
+    static const char* const kNames[] = { "started", "paused", "resumed", "stopped" };
+    while (!c.events.empty() && (int)tuples.size() < max) {
+        const QueuedEvent e = c.events.front();
+        c.events.pop_front();
+        std::ostringstream t;
+        t << std::dec << e.seq << ","
+          << (e.type < 4 ? kNames[e.type] : "?") << ","
+          << std::hex << e.pc << ","
+          << (e.cpu ? "z80" : "m68k");
+        tuples.push_back(t.str());
+    }
+
+    o << "ok " << std::dec << tuples.size();
+    for (const auto& t : tuples) o << " " << t;
+    return o.str();
+}
+
 // ---------------------------------------------------------------------------
-std::string BridgeServer::handle(const std::string& line)
+std::string BridgeServer::handle(const std::string& line, Client& client)
 {
     if (!host_) return "err no host";
     IDebugBackend* be = host_->backend();
@@ -251,6 +322,102 @@ std::string BridgeServer::handle(const std::string& line)
         return "ok " + toHex(d.data(), d.size());
     }
 
+
+    if (cmd == "events") {
+        int max = (int)parseU32(arg(), 10);
+        if (max <= 0 || max > 256) max = 64;
+        return handleEvents(client, max);
+    }
+
+    // --- register writes -------------------------------------------------
+    // One command per CPU rather than per register: the get/modify/set has to
+    // be atomic, and a half-applied register set is worse than none.
+    if (cmd == "wreg68k") {
+        M68kRegs r = be->getM68kRegs();
+        for (std::string kv; is >> kv; ) {
+            const size_t eq = kv.find('=');
+            if (eq == std::string::npos) continue;
+            const std::string k = kv.substr(0, eq);
+            const uint32_t    v = parseU32(kv.substr(eq + 1));
+            if (k.size() == 2 && (k[0] == 'd' || k[0] == 'a') && k[1] >= '0' && k[1] <= '7') {
+                (k[0] == 'd' ? r.d : r.a)[k[1] - '0'] = v;
+            }
+            else if (k == "pc")  r.pc  = v;
+            else if (k == "sr")  r.sr  = v;
+            else if (k == "usp") r.usp = v;
+            else if (k == "isp") r.isp = v;
+        }
+        be->setM68kRegs(r);
+        return "ok";
+    }
+
+    if (cmd == "wregz80") {
+        Z80Regs r = be->getZ80Regs();
+        for (std::string kv; is >> kv; ) {
+            const size_t eq = kv.find('=');
+            if (eq == std::string::npos) continue;
+            const std::string k = kv.substr(0, eq);
+            const uint32_t    v = parseU32(kv.substr(eq + 1));
+            if      (k == "af")  r.af  = uint16_t(v); else if (k == "bc")  r.bc  = uint16_t(v);
+            else if (k == "de")  r.de  = uint16_t(v); else if (k == "hl")  r.hl  = uint16_t(v);
+            else if (k == "af2") r.af2 = uint16_t(v); else if (k == "bc2") r.bc2 = uint16_t(v);
+            else if (k == "de2") r.de2 = uint16_t(v); else if (k == "hl2") r.hl2 = uint16_t(v);
+            else if (k == "ix")  r.ix  = uint16_t(v); else if (k == "iy")  r.iy  = uint16_t(v);
+            else if (k == "sp")  r.sp  = uint16_t(v); else if (k == "pc")  r.pc  = uint16_t(v);
+            else if (k == "i")   r.i   = uint8_t(v);  else if (k == "r")   r.r   = uint8_t(v);
+            else if (k == "im")  r.im  = uint8_t(v);  else if (k == "halt") r.halt = uint8_t(v);
+            else if (k == "iff1") r.iff1 = uint8_t(v); else if (k == "iff2") r.iff2 = uint8_t(v);
+        }
+        // Writing PC mid-instruction is only sound while the core is parked.
+        bool done = false;
+        if (!host_->invoke([&] { be->setZ80Regs(r); done = true; })) return "err emulator not running";
+        return done ? "ok" : "err failed";
+    }
+
+    if (cmd == "readz80") {
+        const uint32_t a = parseU32(arg());
+        const uint32_t n = parseU32(arg(), 10);
+        if (n == 0 || n > (1u << 16)) return "err bad size";
+        const auto d = be->readZ80Memory(uint16_t(a), uint16_t(n));
+        return "ok " + toHex(d.data(), d.size());
+    }
+
+    if (cmd == "writeregion") {
+        const int id     = (int)parseU32(arg(), 10);
+        const uint32_t o = parseU32(arg());
+        const auto d = fromHex(arg());
+        if (d.empty()) return "err no data";
+        return be->writeRegion(id, o, d.data(), (uint32_t)d.size()) ? "ok" : "err write failed";
+    }
+
+    if (cmd == "setvdpreg") {
+        const int idx = (int)parseU32(arg(), 10);
+        be->setVdpReg(idx, uint8_t(parseU32(arg())));
+        return "ok";
+    }
+
+    if (cmd == "callstack") {
+        const Cpu cpu = (arg() == "z80") ? Cpu::Z80 : Cpu::M68K;
+        std::ostringstream o;
+        o << "ok";
+        for (uint32_t ea : be->getCallstack(cpu)) o << " " << std::hex << ea;
+        return o.str();
+    }
+
+    if (cmd == "sound") {
+        const SoundState st = be->getSoundState();
+        std::ostringstream o;
+        o << "ok fm0=" << toHex(st.fm[0], 256) << " fm1=" << toHex(st.fm[1], 256) << " psg=";
+        for (int i = 0; i < 8; ++i) o << (i ? "," : "") << std::dec << st.psg[i];
+        return o.str();
+    }
+
+    if (cmd == "getpad") {
+        const int port = (int)parseU32(arg(), 10);
+        std::ostringstream o; o << "ok " << std::hex << be->getPad(port);
+        return o.str();
+    }
+
     if (cmd == "pause")  { be->pause();    return "ok"; }
     if (cmd == "resume") { be->resume();   return "ok"; }
     // optional trailing "z80" selects the sound CPU
@@ -261,7 +428,9 @@ std::string BridgeServer::handle(const std::string& line)
     }
 
     if (cmd == "pad") {
-        be->setPad(0, (uint16_t)parseU32(arg()));
+        const uint16_t mask = (uint16_t)parseU32(arg());
+        const std::string p = arg();
+        be->setPad(p.empty() ? 0 : (int)parseU32(p, 10), mask);
         return "ok";
     }
 
@@ -272,6 +441,22 @@ std::string BridgeServer::handle(const std::string& line)
         bp.start = parseU32(arg());
         bp.end   = parseU32(arg());
         if (bp.end < bp.start) bp.end = bp.start;
+        // Optional key=value tail. cpu and vdp are not cosmetic: matchBreakpoint
+        // requires both to agree or the breakpoint silently never fires.
+        for (std::string kv; is >> kv; ) {
+            const size_t eq = kv.find('=');
+            if (eq == std::string::npos) continue;
+            const std::string k = kv.substr(0, eq), v = kv.substr(eq + 1);
+            if      (k == "cpu")   bp.cpu     = (v == "z80") ? Cpu::Z80 : Cpu::M68K;
+            else if (k == "vdp")   bp.is_vdp  = (v != "0");
+            else if (k == "elang") bp.elang   = parseU32(v, 10);
+            else if (k == "cond") {           // last: conditions contain spaces
+                std::string rest;
+                std::getline(is, rest);
+                bp.condition = v + rest;
+                break;
+            }
+        }
         return "ok " + std::to_string(be->addBreakpoint(bp));
     }
 
@@ -284,7 +469,9 @@ std::string BridgeServer::handle(const std::string& line)
         for (const auto& b : be->getBreakpoints())
             o << " " << b.id << ","
               << (b.type == BpType::PC ? "x" : b.type == BpType::Read ? "r" : "w") << ","
-              << std::hex << b.start << "," << b.end << std::dec;
+              << std::hex << b.start << "," << b.end << std::dec
+              << "," << (b.cpu == Cpu::Z80 ? "z80" : "m68k")
+              << "," << (b.is_vdp ? 1 : 0) << "," << (b.enabled ? 1 : 0);
         return o.str();
     }
 

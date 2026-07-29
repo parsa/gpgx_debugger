@@ -475,7 +475,7 @@ drc_t start_process(const char* path, const char* input_path)
     stop_audio();
     { std::lock_guard<std::mutex> lk(g_events.mx); g_events.q.clear(); }
 
-    g_host->setEventSink(on_emu_event);
+    g_host->addEventSink(on_emu_event);
     g_host->backend()->setConditionEvaluator(evaluate_condition);
 #ifdef SMD_DGX_IDA_VIEWS
     g_host->setFrameSink(smd_dgx_push_frame);   // no-op unless the Screen dock is open
