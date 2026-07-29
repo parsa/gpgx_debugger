@@ -37,6 +37,10 @@
 void smd_dgx_register_patches();
 void smd_dgx_unregister_patches();
 
+// Constant decoding for the listing (ida_asm.cpp)
+void smd_dgx_register_asm();
+void smd_dgx_unregister_asm();
+
 #ifdef SMD_DGX_IDA_VIEWS
 // Qt-side view builder + IDA-side dock glue. Plain declarations only: this TU
 // must not see Qt headers (see ida_views_shared.h).
@@ -703,6 +707,7 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
         smd_dgx_register_views();
 #endif
         smd_dgx_register_patches();
+        smd_dgx_register_asm();
         msg(PLUGIN_NAME ": in-process GPGX debugger loaded\n");
     }
 
@@ -712,6 +717,7 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
         smd_dgx_unregister_views();
 #endif
         smd_dgx_unregister_patches();
+        smd_dgx_unregister_asm();
         delete g_bridge; g_bridge = nullptr;
         if (g_host) { g_host->stop(); delete g_host; g_host = nullptr; }
         stop_audio();

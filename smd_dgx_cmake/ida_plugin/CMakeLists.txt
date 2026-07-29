@@ -36,6 +36,7 @@ add_library(smd_dgx_ida SHARED
   smd_dgx_ida.cpp
   ida_input.c          # headless input stub (osd_input_update -> no-op)
   ida_patch.cpp        # ROM patching, IDA side (no Qt)
+  ida_asm.cpp          # constant decoding for the listing
   ida_registers.h
   $<$<BOOL:${WIN32}>:${CMAKE_CURRENT_LIST_DIR}/../platform/AudioOutput.cpp>
 )
