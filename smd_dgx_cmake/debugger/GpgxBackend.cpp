@@ -159,6 +159,29 @@ bool GpgxBackend::loadState(const char* path)
     return state_load(buf.data()) != 0;
 }
 
+bool GpgxBackend::runSafely(const std::function<void()>& fn)
+{
+    if (!fn) return false;
+
+    // Preferred: hand it to the host's emulation thread.
+    if (safeExec_) return safeExec_(fn);
+
+    // Already paused — the emulation thread is parked in firePause(), so
+    // nothing is touching the core.
+    if (paused_.load()) { fn(); return true; }
+
+    if (!running_.load()) { fn(); return true; }   // nothing running to race
+
+    // No host queue: stop the world ourselves.
+    pause();
+    for (int i = 0; i < 500 && !paused_.load(); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    if (!paused_.load()) return false;
+    fn();
+    resume();
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Controller input
 // ---------------------------------------------------------------------------

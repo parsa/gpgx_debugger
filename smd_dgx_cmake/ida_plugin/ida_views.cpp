@@ -17,6 +17,7 @@
 #include "ida_views_shared.h"
 
 #include "views/EmulatorScreen.h"
+#include "views/SaveStateView.h"
 #include "views/ScrollView.h"
 #include "views/VdpRamView.h"
 #include "views/VdpRegView.h"
@@ -34,6 +35,7 @@ const char* const smd_dgx_view_titles[SMD_DGX_VIEW_COUNT] = {
     "SMD VDP Ram",
     "SMD VDP Registers",
     "SMD Scroll",
+    "SMD Save States",
     "SMD VDP Sprites",
     "SMD Plane Explorer",
     "SMD YM2612 & PSG",
@@ -88,11 +90,23 @@ void refresh_screen(QWidget* w)
     }
 }
 
+// Set before any view exists, so remember it and apply on creation.
+QString g_statesDir;
+
+QWidget* make_save_states(QWidget* parent)
+{
+    auto* v = new SaveStateView(parent);
+    if (EmuHost* h = smd_dgx_host()) v->setBackend(h->backend());
+    if (!g_statesDir.isEmpty()) v->setStatesDir(g_statesDir);
+    return v;
+}
+
 Dock g_docks[SMD_DGX_VIEW_COUNT] = {
     { &make_screen,                  &refresh_screen,                  {} },
     { &make_view<VdpRamView>,        &refresh_view<VdpRamView>,        {} },
     { &make_view<VdpRegView>,        &refresh_view<VdpRegView>,        {} },
     { &make_view<ScrollView>,        &refresh_view<ScrollView>,        {} },
+    { &make_save_states,             &refresh_view<SaveStateView>,     {} },
     { &make_view<VdpSpritesView>,    &refresh_view<VdpSpritesView>,    {} },
     { &make_view<PlaneExplorerView>, &refresh_view<PlaneExplorerView>, {} },
     { &make_view<SoundDebugView>,    &refresh_view<SoundDebugView>,    {} },
@@ -142,6 +156,14 @@ void smd_dgx_view_attach(int idx, void* twidget_as_qwidget)
         });
     }
     ensure_timer();
+}
+
+void smd_dgx_set_states_dir(const char* path)
+{
+    g_statesDir = QString::fromLocal8Bit(path ? path : "");
+    for (auto& d : g_docks)
+        if (auto* v = qobject_cast<SaveStateView*>(d.widget.data()))
+            v->setStatesDir(g_statesDir);
 }
 
 void smd_dgx_view_detach_all()

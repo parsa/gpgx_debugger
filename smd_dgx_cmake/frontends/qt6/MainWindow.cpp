@@ -4,6 +4,7 @@
 #include "views/VdpRamView.h"
 #include "views/VdpRegView.h"
 #include "views/ScrollView.h"
+#include "views/SaveStateView.h"
 #include "views/VdpSpritesView.h"
 #include "views/PlaneExplorerView.h"
 #include "views/SoundDebugView.h"
@@ -18,6 +19,8 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QCloseEvent>
+#include <QFileInfo>
+#include <QDir>
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 {
@@ -91,6 +94,7 @@ void MainWindow::buildDocks()
     vdpRamView_    = new VdpRamView(this);
     vdpRegView_    = new VdpRegView(this);
     scrollView_    = new ScrollView(this);
+    statesView_    = new SaveStateView(this);
     spritesView_   = new VdpSpritesView(this);
     planeView_     = new PlaneExplorerView(this);
     soundView_     = new SoundDebugView(this);
@@ -101,6 +105,7 @@ void MainWindow::buildDocks()
     vdpRamView_->setBackend(backend_);
     vdpRegView_->setBackend(backend_);
     scrollView_->setBackend(backend_);
+    statesView_->setBackend(backend_);
     spritesView_->setBackend(backend_);
     planeView_->setBackend(backend_);
     soundView_->setBackend(backend_);
@@ -140,6 +145,7 @@ void MainWindow::buildDocks()
     tabifyDockWidget(dHex, dWatch);
     dHex->raise();
 
+    addDock(QStringLiteral("Save States"),     statesView_, Qt::LeftDockWidgetArea, false);
     addDock(QStringLiteral("Plane Explorer"),  planeView_, Qt::LeftDockWidgetArea, false);
     addDock(QStringLiteral("YM2612 && PSG"),   soundView_, Qt::LeftDockWidgetArea, false);
 }
@@ -171,6 +177,12 @@ void MainWindow::openRomFile(const QString& path)
         return;
     }
 
+    // States live beside the ROM here; the IDA host puts them beside the database.
+    {
+        QFileInfo fi(path);
+        statesView_->setStatesDir(fi.dir().filePath(fi.completeBaseName() + QStringLiteral("_states")));
+    }
+
     emuThread_->start();
     refreshTimer_.start();
     statusLabel_->setText(QStringLiteral("Running: ") + path);
@@ -190,6 +202,7 @@ void MainWindow::refreshViews()
     refreshIfVisible(vdpRamView_);
     refreshIfVisible(vdpRegView_);
     refreshIfVisible(scrollView_);
+    refreshIfVisible(statesView_);
     refreshIfVisible(spritesView_);
     refreshIfVisible(planeView_);
     refreshIfVisible(soundView_);
@@ -204,6 +217,7 @@ void MainWindow::onPaused(uint32_t pc)
     vdpRamView_->refresh();
     vdpRegView_->refresh();
     scrollView_->refresh();
+    statesView_->refresh();
     spritesView_->refresh();
     planeView_->refresh();
     soundView_->refresh();

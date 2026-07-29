@@ -31,11 +31,16 @@ public:
     virtual std::vector<uint8_t>    readRegion(int id, uint32_t off, uint32_t size) = 0;
     virtual bool                    writeRegion(int id, uint32_t off, const uint8_t* data, uint32_t size) = 0;
 
-    // Save states. These snapshot/replace the whole machine, so they MUST run
-    // on the emulation thread (EmuHost::post) or while it is paused — calling
-    // them alongside a running core yields a torn state.
+    // Save states. These snapshot/replace the whole machine, so they must not
+    // run alongside a live core — call them through runSafely().
     virtual bool saveState(const char* path) = 0;
     virtual bool loadState(const char* path) = 0;
+
+    // Run fn at a point where it cannot race the emulation thread. UI code
+    // has no idea which host it is embedded in, so the backend arranges it:
+    // via the host's emulation-thread queue when there is one, otherwise by
+    // pausing around the call. Returns false if that could not be arranged.
+    virtual bool runSafely(const std::function<void()>& fn) = 0;
 
     // Controller input: a PadButton mask per port. Safe to call from any
     // thread — the core reads the pad once per frame.

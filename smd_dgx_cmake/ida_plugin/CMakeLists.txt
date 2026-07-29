@@ -78,6 +78,7 @@ if (Qt6_FOUND AND IDA_QT_CORE AND IDA_QT_GUI AND IDA_QT_WIDGETS)
     ida_dock.cpp        # IDA side, no Qt
     ida_views.cpp       # Qt side, no IDA headers
     "${GX_QT6_VIEWS}/EmulatorScreen.cpp"
+    "${GX_QT6_VIEWS}/SaveStateView.cpp"
     "${GX_QT6_VIEWS}/ScrollView.cpp"
     "${GX_QT6_VIEWS}/VdpRamView.cpp"
     "${GX_QT6_VIEWS}/VdpRegView.cpp"

@@ -23,6 +23,12 @@ public:
 
     bool saveState(const char* path) override;
     bool loadState(const char* path) override;
+    bool runSafely(const std::function<void()>& fn) override;
+
+    // A host that owns the emulation thread (EmuHost) installs its queue here;
+    // without one runSafely() falls back to pausing around the call.
+    using SafeExec = std::function<bool(const std::function<void()>&)>;
+    void setSafeExecutor(SafeExec e) { safeExec_ = std::move(e); }
 
     void     setPad(int port, uint16_t buttons) override;
     uint16_t getPad(int port) override;
@@ -68,6 +74,7 @@ private:
     PauseCb  pauseCb_;
     ResumeCb resumeCb_;
     std::function<void()> pausePump_;
+    SafeExec safeExec_;
 
     std::atomic<bool> running_  {false};
     std::atomic<bool> paused_   {false};

@@ -28,6 +28,10 @@ bool EmuHost::start(const std::string& romPath)
     if (!backend_.loadRom(romPath.c_str()))
         return false;
 
+    // Anything that must not race the core (save states above all) goes
+    // through the emulation thread rather than the caller's.
+    backend_.setSafeExecutor([this](const std::function<void()>& fn) { return invoke(fn); });
+
     // While paused, service commands so run-control/reads work mid-pause.
     backend_.setPausePump([this] {
         drainCommands();

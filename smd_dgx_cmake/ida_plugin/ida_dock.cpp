@@ -18,7 +18,7 @@ namespace {
 
 // View indices, in the order of smd_dgx_view_titles.
 enum {
-    V_SCREEN = 0, V_VDPRAM, V_VDPREG, V_SCROLL, V_SPRITES, V_PLANE,
+    V_SCREEN = 0, V_VDPRAM, V_VDPREG, V_SCROLL, V_STATES, V_SPRITES, V_PLANE,
     V_SOUND, V_HEX, V_SEARCH, V_WATCH,
 };
 
@@ -205,6 +205,17 @@ void add_action(const char* name, const char* label, action_handler_t* h,
 
 void smd_dgx_register_views()
 {
+#ifdef SMD_DGX_IDA_VIEWS
+    // Same base name the numbered slots use, but a directory: the manager keeps
+    // several files plus its index there.
+    {
+        qstring base = state_path(0);          // <idb-base>.gp0
+        const size_t dot = base.rfind('.');
+        if (dot != qstring::npos) base.resize(dot);
+        base.append("_states");
+        smd_dgx_set_states_dir(base.c_str());
+    }
+#endif
     for (int i = 0; i < SMD_DGX_VIEW_COUNT; ++i) {
         qsnprintf(g_view_names[i], sizeof(g_view_names[i]), "smd_dgx:view%d", i);
         g_view_handlers[i] = new open_view_ah_t(i);

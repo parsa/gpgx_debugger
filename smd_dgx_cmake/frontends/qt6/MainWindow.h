@@ -12,6 +12,7 @@ class GpgxBackend;
 class VdpRamView;
 class VdpRegView;
 class ScrollView;
+class SaveStateView;
 class VdpSpritesView;
 class PlaneExplorerView;
 class SoundDebugView;
@@ -55,6 +56,7 @@ private:
     VdpRamView*        vdpRamView_    = nullptr;
     VdpRegView*        vdpRegView_    = nullptr;
     ScrollView*        scrollView_    = nullptr;
+    SaveStateView*     statesView_    = nullptr;
     VdpSpritesView*    spritesView_   = nullptr;
     PlaneExplorerView* planeView_     = nullptr;
     SoundDebugView*    soundView_     = nullptr;

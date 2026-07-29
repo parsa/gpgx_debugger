@@ -8,7 +8,7 @@
 // Neither side includes the other's toolkit headers — only this plain header.
 
 // Number of dock views and their titles (defined in ida_views.cpp).
-constexpr int SMD_DGX_VIEW_COUNT = 10;
+constexpr int SMD_DGX_VIEW_COUNT = 11;
 extern const char* const smd_dgx_view_titles[SMD_DGX_VIEW_COUNT];
 
 // Frame sink target: forwards an emulator frame to the "Screen" view if it is
@@ -20,6 +20,10 @@ void smd_dgx_push_frame(const unsigned char* data, int w, int h, int pitch,
 // Qt side (ida_views.cpp) — called by the IDA side:
 //   attach: wrap an IDA TWidget (passed as its QWidget* as void*) with a layout
 //           and the view widget for index `idx`.
+// Where the save-state manager keeps its files. Only the IDA side knows the
+// database path, and only the Qt side owns the widget, so it crosses here.
+void smd_dgx_set_states_dir(const char* path);
+
 void smd_dgx_view_attach(int idx, void* twidget_as_qwidget);
 //   detach_all: stop the refresh timer and drop widget pointers (on term).
 void smd_dgx_view_detach_all();
