@@ -29,6 +29,12 @@
 
 #include "ida_registers.h"
 
+#ifdef SMD_DGX_IDA_VIEWS
+// Qt-side view builder + IDA-side dock glue. Plain declarations only: this TU
+// must not see Qt headers (see ida_views_shared.h).
+#include "ida_views_shared.h"
+#endif
+
 #define PLUGIN_NAME "SMD DGX"
 #define BREAKPOINTS_BASE 0x00D00000u   // VDP pseudo-segments: VRAM +0x00000, CRAM +0x10000, VSRAM +0x20000
 
@@ -384,6 +390,9 @@ drc_t start_process(const char* path, const char* input_path)
     { std::lock_guard<std::mutex> lk(g_events.mx); g_events.q.clear(); }
 
     g_host->setEventSink(on_emu_event);
+#ifdef SMD_DGX_IDA_VIEWS
+    g_host->setFrameSink(smd_dgx_push_frame);   // no-op unless the Screen dock is open
+#endif
 
     const char* rom = (input_path && input_path[0]) ? input_path : path;
     if (!g_host->start(rom ? rom : "")) {
@@ -635,9 +644,6 @@ debugger_t debugger = {
 // crosses the boundary as-is)
 EmuHost* smd_dgx_host() { return g_host; }
 
-#ifdef SMD_DGX_IDA_VIEWS
-#include "ida_views_shared.h"    // smd_dgx_register_views / unregister (ida_dock.cpp)
-#endif
 
 struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
     smd_dgx_plugmod_t()

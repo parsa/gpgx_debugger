@@ -5,11 +5,13 @@
 #include <cstdint>
 #include "debugger/IDebugBackend.h"
 
+QT_BEGIN_NAMESPACE
 class QTableView;
 class QComboBox;
 class QLineEdit;
 class QCheckBox;
 class QRadioButton;
+QT_END_NAMESPACE
 
 // Port of the Gens RAM Search tool over 68k work RAM (region "RAM 68K").
 // Sizes 1/2/4 (+misaligned), signed/unsigned/hex display, comparison operators

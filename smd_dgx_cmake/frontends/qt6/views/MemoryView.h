@@ -5,9 +5,11 @@
 #include "debugger/DebugState.h"
 
 class IDebugBackend;
+QT_BEGIN_NAMESPACE
 class QComboBox;
 class QCheckBox;
 class QLabel;
+QT_END_NAMESPACE
 
 // Full hex editor, functional port of the Gens r57shell-mod hex editor.
 // Region selector, 16 bytes/row hex grid + ASCII column, in-place editing

@@ -71,6 +71,13 @@ void EmuHost::stop()
 
 void EmuHost::run(std::string /*romPath*/)
 {
+    namespace chr = std::chrono;   // core/system.h declares a global system_clock
+
+    const double fps = vdp_pal ? 50.0 : 60.0;
+    const auto frameDur = chr::duration_cast<chr::steady_clock::duration>(
+        chr::duration<double>(1.0 / fps));
+    auto nextFrame = chr::steady_clock::now();
+
     while (!stopFlag_.load()) {
         drainCommands();
 
@@ -78,11 +85,20 @@ void EmuHost::run(std::string /*romPath*/)
 
         if (frameSink_) {
             const t_bitmap& bm = ::bitmap;
-            frameSink_(bm.data, bm.width, bm.height, bm.pitch);
+            frameSink_(bm.data, bm.width, bm.height, bm.pitch,
+                       bm.viewport.x, bm.viewport.y, bm.viewport.w, bm.viewport.h);
         }
-        // No frame pacing here: a debugger host runs as fast as the machine
-        // (IDA gates progress via pauses). A GUI host that wants 60 fps should
-        // pace in its FrameSink or drive frames itself.
+
+        // Run at console speed. Unpaced, the emulator spins a core flat out for
+        // no benefit — a debugger host still wants the game in real time. A
+        // pause blocks inside system_frame_gen, so re-baseline once we are
+        // behind rather than bursting frames to catch up.
+        nextFrame += frameDur;
+        const auto now = chr::steady_clock::now();
+        if (nextFrame > now)
+            std::this_thread::sleep_until(nextFrame);
+        else
+            nextFrame = now;
     }
     gx::shutdown();
 }

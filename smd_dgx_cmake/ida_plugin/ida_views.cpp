@@ -11,9 +11,12 @@
 #include <QPointer>
 #include <QObject>
 
+#include <mutex>
+
 #include "debugger/EmuHost.h"
 #include "ida_views_shared.h"
 
+#include "views/EmulatorScreen.h"
 #include "views/VdpRamView.h"
 #include "views/VdpRegView.h"
 #include "views/VdpSpritesView.h"
@@ -26,6 +29,7 @@
 extern EmuHost* smd_dgx_host();   // smd_dgx_ida.cpp
 
 const char* const smd_dgx_view_titles[SMD_DGX_VIEW_COUNT] = {
+    "SMD Screen",
     "SMD VDP Ram",
     "SMD VDP Registers",
     "SMD VDP Sprites",
@@ -63,7 +67,12 @@ void refresh_view(QWidget* w)
     }
 }
 
+// The screen is driven by the frame sink, not the refresh timer.
+QWidget* make_screen(QWidget* parent) { return new EmulatorScreen(parent); }
+void     refresh_screen(QWidget*)     {}
+
 Dock g_docks[SMD_DGX_VIEW_COUNT] = {
+    { &make_screen,                  &refresh_screen,                  {} },
     { &make_view<VdpRamView>,        &refresh_view<VdpRamView>,        {} },
     { &make_view<VdpRegView>,        &refresh_view<VdpRegView>,        {} },
     { &make_view<VdpSpritesView>,    &refresh_view<VdpSpritesView>,    {} },
@@ -75,6 +84,11 @@ Dock g_docks[SMD_DGX_VIEW_COUNT] = {
 };
 
 QTimer* g_timer = nullptr;
+
+// Screen widget reachable from the emulation thread. Set/cleared on the GUI
+// thread, read under the lock by the frame sink.
+std::mutex      g_screenMx;
+EmulatorScreen* g_screen = nullptr;
 
 void ensure_timer()
 {
@@ -99,11 +113,30 @@ void smd_dgx_view_attach(int idx, void* twidget_as_qwidget)
     layout->setContentsMargins(0, 0, 0, 0);
     g_docks[idx].widget = g_docks[idx].make(host);
     layout->addWidget(g_docks[idx].widget);
+
+    if (auto* screen = qobject_cast<EmulatorScreen*>(g_docks[idx].widget.data())) {
+        { std::lock_guard<std::mutex> lk(g_screenMx); g_screen = screen; }
+        // IDA destroys the widget when the dock is closed; drop the pointer the
+        // frame sink reads before it dangles.
+        QObject::connect(screen, &QObject::destroyed, [](QObject*) {
+            std::lock_guard<std::mutex> lk(g_screenMx);
+            g_screen = nullptr;
+        });
+    }
     ensure_timer();
 }
 
 void smd_dgx_view_detach_all()
 {
     if (g_timer) { g_timer->stop(); g_timer->deleteLater(); g_timer = nullptr; }
+    { std::lock_guard<std::mutex> lk(g_screenMx); g_screen = nullptr; }
     for (auto& d : g_docks) d.widget = nullptr;
+}
+
+void smd_dgx_push_frame(const unsigned char* data, int w, int h, int pitch,
+                        int vpX, int vpY, int vpW, int vpH)
+{
+    std::lock_guard<std::mutex> lk(g_screenMx);
+    if (g_screen)
+        g_screen->pushFrame(data, w, h, pitch, vpX, vpY, vpW, vpH);
 }

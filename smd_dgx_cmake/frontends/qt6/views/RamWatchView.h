@@ -5,7 +5,9 @@
 #include <cstdint>
 #include "debugger/IDebugBackend.h"
 
+QT_BEGIN_NAMESPACE
 class QTableWidget;
+QT_END_NAMESPACE
 
 // Port of the Gens RAM Watch tool (ramwatch.cpp): ordered watch list over the
 // 68k bus, .wch file interchange with Gens (open/append/save), separators,

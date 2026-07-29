@@ -10,7 +10,9 @@
 #include <cstdint>
 #include "debugger/IDebugBackend.h"
 
+QT_BEGIN_NAMESPACE
 class QPainter;
+QT_END_NAMESPACE
 class VdpRamView;
 
 // Internal paint surfaces (plain QWidget children, no signals).

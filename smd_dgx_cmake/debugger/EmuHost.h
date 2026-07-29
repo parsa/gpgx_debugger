@@ -23,8 +23,11 @@
 class EmuHost {
 public:
     // Optional sinks. FrameSink receives the rendered framebuffer each frame
-    // (RGB565, gpgx t_bitmap geometry); omit for a truly headless run.
-    using FrameSink = std::function<void(const uint8_t* data, int width, int height, int pitch)>;
+    // (RGB565, gpgx t_bitmap geometry) plus the active viewport rect — the
+    // visible area varies with H32/H40 and border settings. Omit for a truly
+    // headless run.
+    using FrameSink = std::function<void(const uint8_t* data, int width, int height, int pitch,
+                                         int vpX, int vpY, int vpW, int vpH)>;
     using EventSink = std::function<void(const DebugEvent&)>;
 
     EmuHost();

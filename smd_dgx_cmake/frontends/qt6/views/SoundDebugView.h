@@ -3,12 +3,14 @@
 #include "debugger/DebugState.h"
 
 class IDebugBackend;
+QT_BEGIN_NAMESPACE
 class QLabel;
 class QCheckBox;
 class QRadioButton;
 class QButtonGroup;
 class QTableWidget;
 class QProgressBar;
+QT_END_NAMESPACE
 
 // ADSR envelope sketch for one operator (port of the Gens owner-draw canvas,
 // resolution-independent: same algorithm mapped onto the widget rect).

@@ -53,14 +53,27 @@ set_target_properties(smd_dgx_ida PROPERTIES
   SUFFIX ".dll"
 )
 
-# Views embedding (phase 3): IDA 9.2+ ships stock Qt 6.8.2 — the same Qt our
-# views target, so they are compiled straight into the plugin. At runtime the
-# plugin uses the Qt DLLs already loaded by IDA (do NOT deploy Qt next to it).
-if (Qt6_FOUND)
+# Views embedding (phase 3).
+#
+# IDA ships Qt 6.8.2, but built inside a namespace: its exports are
+# ??0QString@QT@@... , not ??0QString@@... . Linking the stock Qt import libs
+# produces a DLL whose every Qt import is unresolvable at load time ("The
+# specified procedure could not be found"). So:
+#   - headers + moc come from the regular Qt install (same 6.8.2), and
+#   - QT_NAMESPACE=QT makes them declare everything in namespace QT, and
+#   - we link the import libs the SDK ships for IDA's own Qt (lib/x64_win_qt).
+# At runtime the plugin uses the Qt DLLs IDA has already loaded — never deploy
+# Qt next to the plugin.
+find_library(IDA_QT_CORE    Qt6Core    HINTS "${IDA_SDK_DIR}/lib/x64_win_qt" NO_DEFAULT_PATH)
+find_library(IDA_QT_GUI     Qt6Gui     HINTS "${IDA_SDK_DIR}/lib/x64_win_qt" NO_DEFAULT_PATH)
+find_library(IDA_QT_WIDGETS Qt6Widgets HINTS "${IDA_SDK_DIR}/lib/x64_win_qt" NO_DEFAULT_PATH)
+
+if (Qt6_FOUND AND IDA_QT_CORE AND IDA_QT_GUI AND IDA_QT_WIDGETS)
   set(GX_QT6_VIEWS "${CMAKE_CURRENT_LIST_DIR}/../frontends/qt6/views")
   target_sources(smd_dgx_ida PRIVATE
     ida_dock.cpp        # IDA side, no Qt
     ida_views.cpp       # Qt side, no IDA headers
+    "${GX_QT6_VIEWS}/EmulatorScreen.cpp"
     "${GX_QT6_VIEWS}/VdpRamView.cpp"
     "${GX_QT6_VIEWS}/VdpRegView.cpp"
     "${GX_QT6_VIEWS}/VdpSpritesView.cpp"
@@ -70,12 +83,30 @@ if (Qt6_FOUND)
     "${GX_QT6_VIEWS}/RamSearchView.cpp"
     "${GX_QT6_VIEWS}/RamWatchView.cpp"
   )
-  target_include_directories(smd_dgx_ida PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../frontends/qt6")
+  target_include_directories(smd_dgx_ida PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../frontends/qt6"
+    # Qt headers as plain includes; the Qt6:: targets are deliberately NOT
+    # linked, only their include dirs are reused.
+    $<TARGET_PROPERTY:Qt6::Widgets,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:Qt6::Gui,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:Qt6::Core,INTERFACE_INCLUDE_DIRECTORIES>
+  )
   # NOTE: no QT_NO_KEYWORDS — views use signals/slots/emit. If the 9.3 SDK
   # headers clash with Qt keywords, switch views to Q_SIGNALS/Q_SLOTS/Q_EMIT.
-  target_compile_definitions(smd_dgx_ida PRIVATE SMD_DGX_IDA_VIEWS)
-  target_link_libraries(smd_dgx_ida PRIVATE Qt6::Widgets Qt6::Gui Qt6::Core)
+  target_compile_definitions(smd_dgx_ida PRIVATE
+    SMD_DGX_IDA_VIEWS
+    QT_NAMESPACE=QT              # match IDA's namespaced Qt build
+    QT_CORE_LIB QT_GUI_LIB QT_WIDGETS_LIB
+  )
+  # Normally supplied by the Qt6:: targets, which we no longer link.
+  if (MSVC)
+    target_compile_options(smd_dgx_ida PRIVATE /Zc:__cplusplus /permissive-)
+  endif()
+  target_link_libraries(smd_dgx_ida PRIVATE
+    "${IDA_QT_WIDGETS}" "${IDA_QT_GUI}" "${IDA_QT_CORE}")
   set_target_properties(smd_dgx_ida PROPERTIES AUTOMOC ON)
+else()
+  message(STATUS "IDA plugin: views disabled (need Qt6 + ${IDA_SDK_DIR}/lib/x64_win_qt)")
 endif()
 
 if (IDA_INSTALL_DIR)

@@ -6,11 +6,13 @@
 #include "debugger/DebugState.h"
 #include "debugger/IDebugBackend.h"
 
+QT_BEGIN_NAMESPACE
 class QRadioButton;
 class QCheckBox;
 class QLabel;
 class QScrollArea;
 class QMouseEvent;
+QT_END_NAMESPACE
 
 // Pixel canvas for PlaneExplorerView: 1024x1024 indexed plane image inside a
 // QScrollArea, hover tracking, dashed tile/sprite highlight, optional 2x zoom.
