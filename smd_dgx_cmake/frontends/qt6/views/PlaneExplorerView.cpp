@@ -4,6 +4,9 @@
 #include <QRadioButton>
 #include <QButtonGroup>
 #include <QCheckBox>
+#include <QSpinBox>
+#include <QScrollBar>
+#include <QSignalBlocker>
 #include <QLabel>
 #include <QScrollArea>
 #include <QGroupBox>
@@ -46,37 +49,97 @@ void PlaneExplorerCanvas::setHighlight(const QRect& r)
     if (highlight_ != r) { highlight_ = r; update(); }
 }
 
+void PlaneExplorerCanvas::setLockHighlight(const QRect& r)
+{
+    if (lockHighlight_ != r) { lockHighlight_ = r; update(); }
+}
+
 void PlaneExplorerCanvas::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.fillRect(rect(), QColor(0x1E, 0x1E, 0x1E));
     if (image_.isNull()) return;
 
+    // Nearest-neighbour: this is a pixel inspector, a smoothed tile is a lie.
     p.drawImage(QRect(0, 0, image_.width() * zoom_, image_.height() * zoom_), image_);
 
-    if (!highlight_.isNull()) {
-        QPen pen(Qt::white);
-        pen.setStyle(Qt::DashLine);
+    auto frame = [&](const QRect& r, const QPen& pen) {
+        if (r.isNull()) return;
         p.setPen(pen);
         p.setBrush(Qt::NoBrush);
-        p.drawRect(QRect(highlight_.x() * zoom_, highlight_.y() * zoom_,
-                         highlight_.width() * zoom_ - 1, highlight_.height() * zoom_ - 1));
-    }
+        p.drawRect(QRect(r.x() * zoom_, r.y() * zoom_,
+                         r.width() * zoom_ - 1, r.height() * zoom_ - 1));
+    };
+
+    QPen hover(Qt::white);
+    hover.setStyle(Qt::DashLine);
+    frame(highlight_, hover);
+    frame(lockHighlight_, QPen(QColor(0xFF, 0xD7, 0x00), 1));   // pinned: solid amber
+}
+
+bool PlaneExplorerCanvas::toImage(const QPoint& p, int* x, int* y) const
+{
+    if (image_.isNull()) return false;
+    const int ix = p.x() / zoom_, iy = p.y() / zoom_;
+    if (ix < 0 || iy < 0 || ix >= image_.width() || iy >= image_.height()) return false;
+    *x = ix; *y = iy;
+    return true;
 }
 
 void PlaneExplorerCanvas::emitHover(const QPoint& p)
 {
-    if (image_.isNull()) { emit hoverMoved(-1, -1); return; }
-    const int x = p.x() / zoom_, y = p.y() / zoom_;
-    if (x < 0 || y < 0 || x >= image_.width() || y >= image_.height())
-        emit hoverMoved(-1, -1);
-    else
-        emit hoverMoved(x, y);
+    int x = 0, y = 0;
+    if (toImage(p, &x, &y)) emit hoverMoved(x, y);
+    else                    emit hoverMoved(-1, -1);
 }
 
-void PlaneExplorerCanvas::mouseMoveEvent(QMouseEvent* e)  { emitHover(e->pos()); }
-void PlaneExplorerCanvas::mousePressEvent(QMouseEvent* e) { emitHover(e->pos()); }
-void PlaneExplorerCanvas::leaveEvent(QEvent*)             { emit hoverMoved(-1, -1); }
+void PlaneExplorerCanvas::mouseMoveEvent(QMouseEvent* e)
+{
+    if (panning_) {
+        const QPoint d = e->pos() - panOrigin_;
+        // Not updating panOrigin_: the widget moves under the cursor as the
+        // scroll area scrolls, so the delta is already relative to the new
+        // position.
+        emit panRequested(-d.x(), -d.y());
+        return;
+    }
+    emitHover(e->pos());
+}
+
+void PlaneExplorerCanvas::mousePressEvent(QMouseEvent* e)
+{
+    if (e->button() == Qt::MiddleButton) {
+        panning_ = true;
+        panOrigin_ = e->pos();
+        setCursor(Qt::ClosedHandCursor);
+        return;
+    }
+    if (e->button() == Qt::LeftButton) {
+        int x = 0, y = 0;
+        if (toImage(e->pos(), &x, &y)) emit clicked(x, y);
+    }
+}
+
+void PlaneExplorerCanvas::mouseReleaseEvent(QMouseEvent* e)
+{
+    if (e->button() == Qt::MiddleButton && panning_) {
+        panning_ = false;
+        unsetCursor();
+    }
+}
+
+void PlaneExplorerCanvas::wheelEvent(QWheelEvent* e)
+{
+    if (e->modifiers() & Qt::ControlModifier) {
+        const int steps = e->angleDelta().y() > 0 ? 1 : -1;
+        emit zoomRequested(steps);
+        e->accept();
+        return;
+    }
+    e->ignore();          // let the scroll area handle plain wheel
+}
+
+void PlaneExplorerCanvas::leaveEvent(QEvent*) { emit hoverMoved(-1, -1); }
 
 // ------------------------------------------------------------------ view ----
 
@@ -106,11 +169,18 @@ PlaneExplorerView::PlaneExplorerView(QWidget* parent) : QWidget(parent)
     transCheck_ = new QCheckBox(QStringLiteral("Transparency"), this);
     connect(transCheck_, &QCheckBox::toggled, this, &PlaneExplorerView::onTransparency);
 
-    zoomCheck_ = new QCheckBox(QStringLiteral("Zoom 2x"), this);
-    connect(zoomCheck_, &QCheckBox::toggled, this, &PlaneExplorerView::onZoom);
+    zoomSpin_ = new QSpinBox(this);
+    zoomSpin_->setRange(1, 8);
+    zoomSpin_->setPrefix(QStringLiteral("zoom x"));
+    zoomSpin_->setToolTip(QStringLiteral("Ctrl+wheel over the plane also zooms"));
+    connect(zoomSpin_, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &PlaneExplorerView::onZoom);
 
     canvas_ = new PlaneExplorerCanvas;
-    connect(canvas_, &PlaneExplorerCanvas::hoverMoved, this, &PlaneExplorerView::onHover);
+    connect(canvas_, &PlaneExplorerCanvas::hoverMoved,    this, &PlaneExplorerView::onHover);
+    connect(canvas_, &PlaneExplorerCanvas::clicked,       this, &PlaneExplorerView::onClicked);
+    connect(canvas_, &PlaneExplorerCanvas::panRequested,  this, &PlaneExplorerView::onPan);
+    connect(canvas_, &PlaneExplorerCanvas::zoomRequested, this, &PlaneExplorerView::onZoomSteps);
 
     scrollArea_ = new QScrollArea(this);
     scrollArea_->setWidget(canvas_);
@@ -124,7 +194,7 @@ PlaneExplorerView::PlaneExplorerView(QWidget* parent) : QWidget(parent)
     left->addWidget(infoLabel_, 1);
     left->addWidget(group);
     left->addWidget(transCheck_);
-    left->addWidget(zoomCheck_);
+    left->addWidget(zoomSpin_);
 
     auto* main = new QHBoxLayout(this);
     main->setContentsMargins(4, 4, 4, 4);
@@ -161,7 +231,7 @@ void PlaneExplorerView::updateControls()
     const bool en = backend_ != nullptr;
     for (auto* r : radios_) r->setEnabled(en);
     transCheck_->setEnabled(en);
-    zoomCheck_->setEnabled(en);
+    zoomSpin_->setEnabled(en);
 }
 
 void PlaneExplorerView::decodeMode()
@@ -328,6 +398,9 @@ void PlaneExplorerView::onPlane(int idx)
     if (plane_ == idx) return;
     plane_      = idx;
     spriteRect_ = QRect();
+    locked_     = false;              // the pin described a tile of the old plane
+    lockedRect_ = QRect();
+    canvas_->setLockHighlight(QRect());
     clearHover();
     rebuild();
 }
@@ -338,23 +411,91 @@ void PlaneExplorerView::onTransparency(bool on)
     rebuild();
 }
 
-void PlaneExplorerView::onZoom(bool on)
+void PlaneExplorerView::onZoom(int z)
 {
-    zoom_ = on ? 2 : 1;
+    if (z == zoom_) return;
+
+    // Keep the middle of the view looking at the same plane pixel, otherwise
+    // zooming in on a 1024px plane throws away wherever you were.
+    auto* hb = scrollArea_->horizontalScrollBar();
+    auto* vb = scrollArea_->verticalScrollBar();
+    const QSize vp = scrollArea_->viewport()->size();
+    const double cx = (hb->value() + vp.width()  / 2.0) / zoom_;
+    const double cy = (vb->value() + vp.height() / 2.0) / zoom_;
+
+    zoom_ = z;
     canvas_->setZoom(zoom_);
+    if (zoomSpin_->value() != z) {
+        QSignalBlocker block(zoomSpin_);
+        zoomSpin_->setValue(z);
+    }
+
+    hb->setValue(int(cx * zoom_ - vp.width()  / 2.0));
+    vb->setValue(int(cy * zoom_ - vp.height() / 2.0));
+}
+
+void PlaneExplorerView::onZoomSteps(int steps)
+{
+    onZoom(std::clamp(zoom_ + steps, 1, 8));
+}
+
+void PlaneExplorerView::onPan(int dx, int dy)
+{
+    auto* hb = scrollArea_->horizontalScrollBar();
+    auto* vb = scrollArea_->verticalScrollBar();
+    hb->setValue(hb->value() + dx);
+    vb->setValue(vb->value() + dy);
 }
 
 void PlaneExplorerView::clearHover()
 {
+    // A pinned tile owns the readout; a wandering cursor must not wipe it.
+    if (locked_) return;
     infoLabel_->clear();
+    canvas_->setHighlight(QRect());
+}
+
+void PlaneExplorerView::onClicked(int x, int y)
+{
+    if (!hasData_) return;
+
+    const QRect r = describeAt(x, y);
+    if (r.isNull()) return;
+
+    // Clicking the pinned tile again releases it.
+    if (locked_ && r == lockedRect_) {
+        locked_ = false;
+        lockedRect_ = QRect();
+        canvas_->setLockHighlight(QRect());
+        onHover(x, y);
+        return;
+    }
+
+    locked_     = true;
+    lockedRect_ = r;
+    lockedX_    = x;
+    lockedY_    = y;
+    canvas_->setLockHighlight(r);
     canvas_->setHighlight(QRect());
 }
 
 void PlaneExplorerView::onHover(int x, int y)
 {
+    if (locked_) return;                       // the pinned tile owns the readout
     if (x < 0 || y < 0 || !hasData_) { clearHover(); return; }
+
+    const QRect r = describeAt(x, y);
+    if (r.isNull()) { clearHover(); return; }
+    canvas_->setHighlight(r);
+}
+
+// Fills the info panel for the plane pixel (x,y) and returns the rect that
+// describes it — the tile cell, or the whole sprite when the sprite layer is
+// shown. A null rect means nothing is there.
+QRect PlaneExplorerView::describeAt(int x, int y)
+{
     const int W = planeW_ * 8, H = planeH_ * tileH_;
-    if (x >= W || y >= H) { clearHover(); return; }
+    if (x < 0 || y < 0 || x >= W || y >= H) return QRect();
 
     if (plane_ < 3) {
         const int      tx   = x / 8, ty = y / tileH_;
@@ -369,7 +510,7 @@ void PlaneExplorerView::onHover(int x, int y)
             (val & 0x0800) ? "YES" : "NO",
             (val & 0x1000) ? "YES" : "NO",
             (val & 0x8000) ? "YES" : "NO"));
-        canvas_->setHighlight(QRect(x & ~7, y & ~(tileH_ - 1), 8, tileH_));
+        return QRect(x & ~7, y & ~(tileH_ - 1), 8, tileH_);
     } else {
         const int startY = im2_ ? 0x100 : 0x80;
         for (int no : spriteLinkOrder()) {          // link order: first hit wins
@@ -388,8 +529,8 @@ void PlaneExplorerView::onHover(int x, int y)
                 s.xpos, s.ypos, w, h, s.block, s.block, s.link, s.pal,
                 s.hf ? "YES" : "NO", s.vf ? "YES" : "NO", s.prio ? "YES" : "NO"));
             spriteRect_ = QRect(minX, minY, w, h);
-            break;
+            return spriteRect_;
         }
-        canvas_->setHighlight(spriteRect_);         // stale rect persists on miss
+        return spriteRect_;      // stale rect persists on miss, as in the original
     }
 }

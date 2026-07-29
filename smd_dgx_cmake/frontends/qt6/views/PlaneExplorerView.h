@@ -9,13 +9,20 @@
 QT_BEGIN_NAMESPACE
 class QRadioButton;
 class QCheckBox;
+class QSpinBox;
 class QLabel;
 class QScrollArea;
 class QMouseEvent;
+class QWheelEvent;
 QT_END_NAMESPACE
 
 // Pixel canvas for PlaneExplorerView: 1024x1024 indexed plane image inside a
-// QScrollArea, hover tracking, dashed tile/sprite highlight, optional 2x zoom.
+// QScrollArea. Tracks the cursor, draws a dashed hover highlight plus a solid
+// one for the locked tile, and scales by an integer zoom (nearest, so pixels
+// stay pixels).
+//
+// Navigation: middle-drag pans (left-click is taken by locking), Ctrl+wheel
+// zooms, plain wheel is left to the scroll area.
 class PlaneExplorerCanvas : public QWidget {
     Q_OBJECT
 public:
@@ -23,19 +30,30 @@ public:
     void setImage(const QImage& img);
     void clearImage();
     void setZoom(int z);
+    int  zoom() const { return zoom_; }
     void setHighlight(const QRect& r);
+    void setLockHighlight(const QRect& r);
 signals:
     void hoverMoved(int x, int y);          // image-space pixel; (-1,-1) on leave
+    void clicked(int x, int y);             // image-space pixel
+    void panRequested(int dx, int dy);      // pixels to scroll by
+    void zoomRequested(int steps);          // +1 in, -1 out
 protected:
     void paintEvent(QPaintEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void mousePressEvent(QMouseEvent*) override;
+    void mouseReleaseEvent(QMouseEvent*) override;
+    void wheelEvent(QWheelEvent*) override;
     void leaveEvent(QEvent*) override;
 private:
-    void emitHover(const QPoint& p);
+    bool  toImage(const QPoint& p, int* x, int* y) const;
+    void  emitHover(const QPoint& p);
     QImage image_;
     QRect  highlight_;
+    QRect  lockHighlight_;
     int    zoom_ = 1;
+    bool   panning_ = false;
+    QPoint panOrigin_;
 };
 
 // Port of Gens KMod "Plane Explorer" (plane_explorer_kmod.cpp).
@@ -49,8 +67,11 @@ public:
 private slots:
     void onPlane(int idx);
     void onTransparency(bool on);
-    void onZoom(bool on);
+    void onZoom(int z);
+    void onZoomSteps(int steps);
+    void onPan(int dx, int dy);
     void onHover(int x, int y);
+    void onClicked(int x, int y);
 private:
     // Snapshot access: VRAM logical byte at A lives at [A^1]; CRAM entries 16-bit LE.
     uint8_t  vb(uint32_t a) const { return vram_[(a & 0xFFFFu) ^ 1u]; }
@@ -73,6 +94,8 @@ private:
     std::vector<int> spriteLinkOrder() const;
     void clearHover();
     void updateControls();
+    // Fills the info panel and returns the rect to highlight; empty rect = miss.
+    QRect describeAt(int x, int y);
 
     IDebugBackend* backend_ = nullptr;
     bool           hasData_ = false;
@@ -97,9 +120,16 @@ private:
 
     QRect spriteRect_;                      // stale sprite highlight persists on miss
 
+    // Clicking pins the readout to one tile so it can be studied (and the
+    // emulator stepped) without the mouse having to stay put — the same
+    // behaviour VDP Ram has. Clicking the pinned tile again releases it.
+    bool  locked_    = false;
+    QRect lockedRect_;
+    int   lockedX_ = 0, lockedY_ = 0;
+
     QRadioButton*        radios_[4] {};
     QCheckBox*           transCheck_ = nullptr;
-    QCheckBox*           zoomCheck_  = nullptr;
+    QSpinBox*            zoomSpin_   = nullptr;
     QLabel*              infoLabel_  = nullptr;
     QScrollArea*         scrollArea_ = nullptr;
     PlaneExplorerCanvas* canvas_     = nullptr;
