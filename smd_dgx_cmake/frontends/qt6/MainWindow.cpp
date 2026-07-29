@@ -25,7 +25,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
     backend_ = new GpgxBackend();
     screen_  = new EmulatorScreen(this);
+    screen_->setBackend(backend_);      // controller input goes through it
     setCentralWidget(screen_);
+    screen_->setFocus();
 
     statusLabel_ = new QLabel(QStringLiteral("No ROM loaded"), this);
     statusBar()->addWidget(statusLabel_);

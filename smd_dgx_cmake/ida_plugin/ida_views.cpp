@@ -68,8 +68,23 @@ void refresh_view(QWidget* w)
 }
 
 // The screen is driven by the frame sink, not the refresh timer.
-QWidget* make_screen(QWidget* parent) { return new EmulatorScreen(parent); }
-void     refresh_screen(QWidget*)     {}
+QWidget* make_screen(QWidget* parent)
+{
+    auto* s = new EmulatorScreen(parent);
+    if (EmuHost* h = smd_dgx_host())
+        s->setBackend(h->backend());   // needed for controller input
+    return s;
+}
+
+// Frames arrive through the sink, but the backend still has to be rebound in
+// case the dock outlived a host restart (that is where input goes).
+void refresh_screen(QWidget* w)
+{
+    if (auto* s = qobject_cast<EmulatorScreen*>(w)) {
+        if (EmuHost* h = smd_dgx_host())
+            s->setBackend(h->backend());
+    }
+}
 
 Dock g_docks[SMD_DGX_VIEW_COUNT] = {
     { &make_screen,                  &refresh_screen,                  {} },
