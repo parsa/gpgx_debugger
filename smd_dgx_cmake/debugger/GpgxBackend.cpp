@@ -69,6 +69,7 @@ Z80Regs GpgxBackend::getZ80Regs()
     r.sp  = Z80.sp.w.l;  r.pc  = Z80.pc.w.l;
     r.i   = Z80.i; r.r = Z80.r; r.im = Z80.im;
     r.iff1 = Z80.iff1; r.iff2 = Z80.iff2; r.halt = Z80.halt;
+    r.bank = ::zbank;
     return r;
 }
 
@@ -330,11 +331,25 @@ bool GpgxBackend::writeRegion(int id, uint32_t off, const uint8_t* data, uint32_
     return true;
 }
 
+// The Z80's own 16-bit view. Only the parts that can be read without side
+// effects are served: $4000 (YM2612) and $7F00 (VDP) are live hardware ports
+// where a read changes state, so they stay 0xFF rather than being "helpfully"
+// sampled behind the driver's back.
 std::vector<uint8_t> GpgxBackend::readZ80Memory(uint16_t addr, uint16_t size)
 {
     std::vector<uint8_t> buf(size, 0xFF);
-    for (uint16_t i = 0; i < size; ++i)
-        if ((uint16_t)(addr + i) < 0x2000) buf[i] = ::zram[addr + i];
+    for (uint16_t i = 0; i < size; ++i) {
+        const uint16_t a = (uint16_t)(addr + i);
+        if (a < 0x4000) {
+            buf[i] = ::zram[a & 0x1FFF];            // 8K, mirrored through $3FFF
+        } else if (a >= 0x8000) {
+            // Bank window into 68000 space. Same word-swap correction as
+            // readMemory: the core stores ROM/RAM byte-swapped on LSB_FIRST.
+            const uint32_t b = (::zbank | (a & 0x7FFF)) & 0xFFFFFF;
+            const cpu_memory_map* map = &m68k.memory_map[(b >> 16) & 0xFF];
+            if (map->base) buf[i] = map->base[(b & 0xFFFF) ^ 1];
+        }
+    }
     return buf;
 }
 
@@ -560,21 +575,49 @@ uint8_t GpgxBackend::z80ByteAt(uint16_t pc) const
     return (pc < 0x2000) ? zram[pc] : 0;   // table read: never touch IO handlers
 }
 
+// Is the condition in a CALL cc,nn / RET cc satisfied right now?
+//
+// The hook fires before the instruction executes, so the flags still hold the
+// values the instruction is about to test. Checking them is the only way to
+// know whether the call is actually taken — and it matters: a sound driver
+// polling a flag with "call nz,handler" executes that opcode thousands of
+// times a second and takes it almost never. Counting them all made the stack
+// pile up until it hit the cap, which is exactly what a bogus 256-deep
+// callstack of one repeated address looks like.
+static bool z80CondTrue(uint8_t op, uint16_t af)
+{
+    const uint8_t f = uint8_t(af & 0xFF);
+    switch ((op >> 3) & 7) {
+    case 0: return (f & 0x40) == 0;   // NZ
+    case 1: return (f & 0x40) != 0;   // Z
+    case 2: return (f & 0x01) == 0;   // NC
+    case 3: return (f & 0x01) != 0;   // C
+    case 4: return (f & 0x04) == 0;   // PO
+    case 5: return (f & 0x04) != 0;   // PE
+    case 6: return (f & 0x80) == 0;   // P
+    default: return (f & 0x80) != 0;  // M
+    }
+}
+
 void GpgxBackend::trackZ80Call(uint16_t pc)
 {
     const uint8_t op = z80ByteAt(pc);
     bool call = false, ret = false;
     switch (op) {
-    // CALL nn and its conditional forms, plus the RST one-byte calls
-    case 0xCD: case 0xDC: case 0xFC: case 0xD4: case 0xC4:
+    case 0xCD:                                          // CALL nn
+        call = true; break;
+    case 0xDC: case 0xFC: case 0xD4: case 0xC4:         // CALL cc,nn
     case 0xF4: case 0xEC: case 0xE4: case 0xCC:
-    case 0xC7: case 0xCF: case 0xD7: case 0xDF:
+        call = z80CondTrue(op, Z80.af.w.l); break;
+    case 0xC7: case 0xCF: case 0xD7: case 0xDF:         // RST — always taken
     case 0xE7: case 0xEF: case 0xF7: case 0xFF:
         call = true; break;
-    case 0xC9: case 0xD8: case 0xF8: case 0xD0: case 0xC0:
-    case 0xF0: case 0xE8: case 0xE0: case 0xC8:
+    case 0xC9:                                          // RET
         ret = true; break;
-    case 0xED:                                   // reti / retn
+    case 0xD8: case 0xF8: case 0xD0: case 0xC0:         // RET cc
+    case 0xF0: case 0xE8: case 0xE0: case 0xC8:
+        ret = z80CondTrue(op, Z80.af.w.l); break;
+    case 0xED:                                          // reti / retn
         if (z80ByteAt(uint16_t(pc + 1)) == 0x4D || z80ByteAt(uint16_t(pc + 1)) == 0x45)
             ret = true;
         break;

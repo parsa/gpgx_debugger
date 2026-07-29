@@ -14,6 +14,11 @@ struct Z80Regs {
     uint16_t af2, bc2, de2, hl2;
     uint16_t ix, iy, sp, pc;
     uint8_t  i, r, im, iff1, iff2, halt;
+    // Base of the 68000-space window the Z80 sees at $8000..$FFFF. Not a CPU
+    // register — it lives in the bus glue, shifted in one bit at a time
+    // through $6000 — but a Z80 disassembly is unreadable without it: sample
+    // banks and driver overlays all arrive through that window.
+    uint32_t bank;
 };
 
 // Byte-order contract for the raw pointers below (LSB_FIRST build). The core

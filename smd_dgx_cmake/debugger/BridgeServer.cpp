@@ -273,9 +273,11 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         std::ostringstream o;
         o << "ok" << std::hex
           << " af=" << r.af << " bc=" << r.bc << " de=" << r.de << " hl=" << r.hl
+          << " af2=" << r.af2 << " bc2=" << r.bc2 << " de2=" << r.de2 << " hl2=" << r.hl2
           << " ix=" << r.ix << " iy=" << r.iy << " sp=" << r.sp << " pc=" << r.pc
           << " i=" << (int)r.i << " r=" << (int)r.r << " im=" << (int)r.im
-          << " halt=" << (int)r.halt;
+          << " iff1=" << (int)r.iff1 << " iff2=" << (int)r.iff2
+          << " halt=" << (int)r.halt << " bank=" << r.bank;
         return o.str();
     }
 
@@ -307,9 +309,15 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
     if (cmd == "regions") {
         std::ostringstream o;
         o << "ok";
-        for (const auto& r : be->getMemRegions())
-            o << " " << r.id << ":" << r.name << ":" << std::hex << r.base
+        for (const auto& r : be->getMemRegions()) {
+            // Records are space-separated, so a name may not contain a space:
+            // "RAM 68K" would split into two bogus records and every client
+            // that checks the field count would silently drop the region.
+            std::string name = r.name;
+            for (char& c : name) if (c == ' ') c = '_';
+            o << " " << r.id << ":" << name << ":" << std::hex << r.base
               << ":" << r.size << ":" << (r.writable ? 1 : 0) << std::dec;
+        }
         return o.str();
     }
 

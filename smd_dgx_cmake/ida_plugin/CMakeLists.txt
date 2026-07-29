@@ -34,6 +34,8 @@ endif()
 
 add_library(smd_dgx_ida SHARED
   smd_dgx_ida.cpp
+  smd_dgx_ida_z80.cpp  # second debugger_t: attaches to a running emulator
+  ida_z80_loader.cpp   # "Dump Z80 driver" action
   ida_input.c          # headless input stub (osd_input_update -> no-op)
   ida_patch.cpp        # ROM patching, IDA side (no Qt)
   ida_asm.cpp          # constant decoding for the listing

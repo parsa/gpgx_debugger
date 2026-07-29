@@ -65,6 +65,7 @@ add_library(smd_dgx_emu STATIC
   "${CMAKE_CURRENT_LIST_DIR}/debugger/InProcTransport.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/debugger/EmuHost.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/debugger/BridgeServer.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/debugger/RemoteBackend.cpp"   # the client side of it
 )
 if (WIN32)
   target_link_libraries(smd_dgx_emu PUBLIC ws2_32)   # BridgeServer sockets

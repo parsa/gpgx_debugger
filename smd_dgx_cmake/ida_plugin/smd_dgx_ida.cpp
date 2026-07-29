@@ -40,6 +40,10 @@ void smd_dgx_unregister_patches();
 void smd_dgx_register_asm();
 void smd_dgx_unregister_asm();
 
+// Z80-database actions: dump the live driver RAM (ida_z80_loader.cpp)
+void smd_dgx_register_z80_actions();
+void smd_dgx_unregister_z80_actions();
+
 #ifdef SMD_DGX_IDA_VIEWS
 // Qt-side view builder + IDA-side dock glue. Plain declarations only: this TU
 // must not see Qt headers (see ida_views_shared.h).
@@ -763,6 +767,38 @@ debugger_t debugger = {
 EmuHost* smd_dgx_host() { return g_host; }
 
 
+// --- Z80 half (smd_dgx_ida_z80.cpp) ---------------------------------------
+// Same binary, different debugger_t: which one is registered depends on the
+// database's processor, and the Z80 one attaches to the emulator this one runs.
+extern debugger_t z80_debugger;
+ssize_t idaapi smd_dgx_z80_event(int msgid, va_list va);
+void smd_dgx_z80_shutdown();
+
+struct smd_dgx_z80_plugmod_t : public plugmod_t, public event_listener_t {
+    smd_dgx_z80_plugmod_t()
+    {
+        hook_event_listener(HT_IDD, this);
+        dbg = &z80_debugger;
+        smd_dgx_register_z80_actions();
+        msg(PLUGIN_NAME ": Z80 debugger loaded (attaches to a running emulator)\n");
+    }
+
+    ~smd_dgx_z80_plugmod_t() override
+    {
+        smd_dgx_unregister_z80_actions();
+        smd_dgx_z80_shutdown();
+        if (dbg == &z80_debugger)
+            dbg = nullptr;
+    }
+
+    ssize_t idaapi on_event(ssize_t code, va_list va) override
+    {
+        return smd_dgx_z80_event((int)code, va);
+    }
+
+    bool idaapi run(size_t) override { return false; }
+};
+
 struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
     smd_dgx_plugmod_t()
     {
@@ -773,6 +809,7 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
 #endif
         smd_dgx_register_patches();
         smd_dgx_register_asm();
+        smd_dgx_register_z80_actions();
         msg(PLUGIN_NAME ": in-process GPGX debugger loaded\n");
     }
 
@@ -783,6 +820,7 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
 #endif
         smd_dgx_unregister_patches();
         smd_dgx_unregister_asm();
+        smd_dgx_unregister_z80_actions();
         delete g_bridge; g_bridge = nullptr;
         if (g_host) { g_host->stop(); delete g_host; g_host = nullptr; }
         stop_audio();
@@ -801,10 +839,14 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
 
 static plugmod_t* idaapi init()
 {
-    // only meaningful for a 68000 database
-    if (PH.id != PLFM_68K)
-        return nullptr;
-    return new smd_dgx_plugmod_t;
+    // One binary, two debuggers. A database is either the game (68000, runs
+    // the emulator) or the sound driver (Z80, attaches to it); anything else
+    // is none of our business.
+    if (PH.id == PLFM_68K)
+        return new smd_dgx_plugmod_t;
+    if (PH.id == PLFM_Z80)
+        return new smd_dgx_z80_plugmod_t;
+    return nullptr;
 }
 
 plugin_t PLUGIN = {

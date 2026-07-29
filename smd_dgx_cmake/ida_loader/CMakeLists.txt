@@ -32,3 +32,32 @@ if (IDA_INSTALL_DIR)
             "$<TARGET_FILE:smd_dgx_ldr>" "${IDA_INSTALL_DIR}/loaders/"
     COMMENT "Copy loader to IDA loaders dir")
 endif()
+
+# ---- Z80 sound-driver loader ----
+#
+# Builds the 64K Z80 view (8K RAM, the YM2612/PSG/bank ports, the $8000 window)
+# for a driver dumped out of a running game. Its database is the one the Z80
+# half of the debugger plugin attaches with.
+add_library(smd_dgx_z80_ldr SHARED
+  z80_loader.cpp
+  z80_loader.h
+)
+target_include_directories(smd_dgx_z80_ldr PRIVATE "${IDA_SDK_DIR}/include")
+target_compile_definitions(smd_dgx_z80_ldr PRIVATE
+  __NT__ __X64__ __EA64__
+  NO_OBSOLETE_FUNCS
+)
+target_link_libraries(smd_dgx_z80_ldr PRIVATE "${IDA_LIB}")
+set_target_properties(smd_dgx_z80_ldr PROPERTIES
+  CXX_STANDARD 20
+  CXX_STANDARD_REQUIRED YES
+  OUTPUT_NAME "smd_dgx_z80_ldr"
+  SUFFIX ".dll"
+)
+
+if (IDA_INSTALL_DIR)
+  add_custom_command(TARGET smd_dgx_z80_ldr POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "$<TARGET_FILE:smd_dgx_z80_ldr>" "${IDA_INSTALL_DIR}/loaders/"
+    COMMENT "Copy Z80 loader to IDA loaders dir")
+endif()
