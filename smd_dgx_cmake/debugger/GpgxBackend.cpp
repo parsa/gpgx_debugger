@@ -301,6 +301,15 @@ void GpgxBackend::stepOver()
 bool GpgxBackend::loadRom(const char* path)
 {
     gx::init();
+
+    // gx::init() zeroes the bitmap descriptor but allocates no framebuffer —
+    // supplying it is the host's job, and the VDP renderer writes through the
+    // pointer on the very first frame. Own it here so every host (standalone
+    // frontend, IDA plugin, anything future) is safe by construction.
+    // Sized for the largest geometry gpgx can produce at 32bpp.
+    static std::vector<uint8_t> framebuffer(720 * 576 * 4, 0);
+    gx::bitmap_data() = framebuffer.data();
+
     bool ok = gx::load_rom(path);
     if (ok) running_.store(true);
     return ok;
