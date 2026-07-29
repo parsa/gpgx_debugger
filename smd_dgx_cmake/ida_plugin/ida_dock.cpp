@@ -81,6 +81,10 @@ void apply_preset(const Preset& p)
         open_view(p.bottom);
         set_dock_pos(smd_dgx_view_titles[p.bottom], anchorTitle, DP_BOTTOM);
     }
+    // IDA's own register window belongs next to the VDP state — that pairing is
+    // most of what one looks at while stepping. It only exists while debugging,
+    // and set_dock_pos on a missing widget is a no-op, so this is safe either way.
+    set_dock_pos("General registers", anchorTitle, DP_TAB);
     // Leave the anchor in front rather than whichever tab was added last.
     if (TWidget* w = find_widget(anchorTitle))
         activate_widget(w, true);

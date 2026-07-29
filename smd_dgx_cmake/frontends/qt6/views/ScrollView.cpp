@@ -19,7 +19,7 @@ const QColor kCanvas(0x1E, 0x1E, 0x1E);
 
 constexpr int kMargin = 6;
 constexpr int kAxisW  = 44;   // room for value labels
-constexpr int kHeadH  = 34;   // decoded-mode header
+constexpr int kHeadH  = 52;   // mode line + legend + room for the plot title
 } // namespace
 
 ScrollView::ScrollView(QWidget* parent) : QWidget(parent)
@@ -85,34 +85,54 @@ QRect ScrollView::vRect() const
 void ScrollView::drawPlot(QPainter& p, const QRect& r, const std::vector<Sample>& data,
                           const QString& title, const QString& xLabel, bool stepped) const
 {
-    p.setPen(kInk);
-    p.drawText(r.left(), r.top() - 4, title);
-    if (data.empty() || r.height() < 20) return;
+    if (data.empty() || r.height() < 20) {
+        p.setPen(kInk);
+        p.drawText(r.left(), r.top() - 4, title);
+        return;
+    }
 
     int lo = data[0].a, hi = data[0].a;
     for (const auto& s : data) {
         lo = std::min({ lo, s.a, s.b });
         hi = std::max({ hi, s.a, s.b });
     }
-    if (hi == lo) { hi = lo + 1; }          // a flat table still needs a scale
+    // A table that never varies is the common case (no raster effect). Drawing
+    // it against a 0..1 scale would pin the line to the bottom edge and look
+    // like an empty box, so centre it and label the one value instead.
+    const bool flat = (hi == lo);
+
+    // Say so outright: a constant table means there is no raster effect here,
+    // which is otherwise indistinguishable from a broken view.
+    p.setPen(kInk);
+    p.drawText(r.left(), r.top() - 4,
+               flat ? title + QStringLiteral("  — constant") : title);
 
     p.fillRect(r, QColor(0x14, 0x14, 0x14));
     p.setPen(kGrid);
     p.drawRect(r);
 
-    // value axis
-    p.setPen(kInk);
     const QFontMetrics fm(font());
-    p.drawText(QRect(0, r.top() - fm.height() / 2, kAxisW + kMargin - 4, fm.height()),
-               Qt::AlignRight | Qt::AlignVCenter, QString::number(hi));
-    p.drawText(QRect(0, r.bottom() - fm.height() / 2, kAxisW + kMargin - 4, fm.height()),
-               Qt::AlignRight | Qt::AlignVCenter, QString::number(lo));
+    auto axisLabel = [&](int y, int value) {
+        p.setPen(kInk);
+        p.drawText(QRect(0, y - fm.height() / 2, kAxisW + kMargin - 4, fm.height()),
+                   Qt::AlignRight | Qt::AlignVCenter, QString::number(value));
+    };
 
     const int n = int(data.size());
     auto xAt = [&](int i) { return r.left() + (n == 1 ? 0 : i * (r.width() - 1) / (n - 1)); };
     auto yAt = [&](int val) {
+        if (flat) return r.top() + r.height() / 2;
         return r.bottom() - int((val - lo) * qint64(r.height() - 1) / (hi - lo));
     };
+
+    if (flat) {
+        axisLabel(r.top() + r.height() / 2, lo);
+        p.setPen(kGrid);
+        p.drawLine(r.left(), yAt(lo), r.right(), yAt(lo));
+    } else {
+        axisLabel(r.top(), hi);
+        axisLabel(r.bottom(), lo);
+    }
 
     for (int plane = 0; plane < 2; ++plane) {
         p.setPen(QPen(plane ? kPlaneB : kPlaneA, 1));
