@@ -17,6 +17,7 @@ public:
     virtual M68kRegs   getM68kRegs() = 0;
     virtual void       setM68kRegs(const M68kRegs&) = 0;
     virtual Z80Regs    getZ80Regs() = 0;
+    virtual void       setZ80Regs(const Z80Regs&) = 0;
     virtual VdpState   getVdpState() = 0;
     virtual void       setVdpReg(int idx, uint8_t value) = 0;   // raw shadow write, Gens semantics
     virtual SoundState getSoundState() = 0;
@@ -49,7 +50,7 @@ public:
 
     // Return addresses of the calls currently on the stack, outermost first.
     // Heuristic (tracked from jsr/bsr/rts/rte), like the original Gens.
-    virtual std::vector<uint32_t> getCallstack() = 0;
+    virtual std::vector<uint32_t> getCallstack(Cpu cpu) = 0;
 
     // Breakpoint conditions are written in the *client's* language (IDA's IDC
     // or Python), so only the client can evaluate them. A host that can do so
@@ -65,13 +66,15 @@ public:
     virtual std::vector<Breakpoint> getBreakpoints() = 0;
 
     // Run control
+    // Run control. The CPU selects which processor a step applies to; pause
+    // and resume stop the whole machine either way, since there is one core.
     virtual void pause() = 0;
     virtual void resume() = 0;
-    virtual void stepInto() = 0;
-    virtual void stepOver() = 0;
+    virtual void stepInto(Cpu cpu) = 0;
+    virtual void stepOver(Cpu cpu) = 0;
     virtual bool isPaused() const = 0;
 
-    using PauseCb  = std::function<void(uint32_t pc)>;
+    using PauseCb  = std::function<void(uint32_t pc, Cpu cpu)>;
     using ResumeCb = std::function<void()>;
     virtual void onPaused(PauseCb)  = 0;
     virtual void onResumed(ResumeCb) = 0;

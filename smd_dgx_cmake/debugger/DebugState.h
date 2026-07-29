@@ -99,9 +99,15 @@ enum : uint32_t { VDP_BP_VRAM = 0x00000, VDP_BP_CRAM = 0x10000, VDP_BP_VSRAM = 0
 
 enum class BpType : uint8_t { PC = 1, Read = 2, Write = 3 };
 
+// Which processor a breakpoint or a stop belongs to. One machine, two CPUs:
+// without this the Z80 — which executes far more instructions per frame than
+// the 68000 — swallows every step and matches every address.
+enum class Cpu : uint8_t { M68K = 0, Z80 = 1 };
+
 struct Breakpoint {
     int      id      = 0;
     BpType   type    = BpType::PC;
+    Cpu      cpu     = Cpu::M68K;
     bool     is_vdp  = false;
     bool     enabled = true;
     uint32_t start   = 0;

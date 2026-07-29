@@ -606,8 +606,8 @@ ssize_t idaapi debugger_callback(void*, int msgid, va_list va)
         resume_mode_t resmod = va_argi(va, resume_mode_t);
         if (!g_host) { retcode = DRC_FAILED; break; }
         switch (resmod) {
-        case RESMOD_INTO: g_host->backend()->stepInto(); retcode = DRC_OK; break;
-        case RESMOD_OVER: g_host->backend()->stepOver(); retcode = DRC_OK; break;
+        case RESMOD_INTO: g_host->backend()->stepInto(Cpu::M68K); retcode = DRC_OK; break;
+        case RESMOD_OVER: g_host->backend()->stepOver(Cpu::M68K); retcode = DRC_OK; break;
         default:          retcode = DRC_FAILED; break;
         }
         break;
@@ -706,7 +706,7 @@ ssize_t idaapi debugger_callback(void*, int msgid, va_list va)
         if (!g_host || !trace) { retcode = DRC_NONE; break; }
         trace->clear();
         // Backend order is outermost-first, which is what IDA expects.
-        for (uint32_t ea : g_host->backend()->getCallstack()) {
+        for (uint32_t ea : g_host->backend()->getCallstack(Cpu::M68K)) {
             call_stack_info_t& f = trace->push_back();
             f.callea = ea;
             f.funcea = BADADDR;

@@ -3428,6 +3428,15 @@ void z80_run(unsigned int cycles)
       if (Z80.cycles >= cycles) return;
     }
 
+#ifdef HOOK_CPU
+    /* PC still points at the opcode about to be fetched: ROP() advances it
+       inside EXEC_INLINE below. Hooking here rather than inside EXEC keeps it
+       to one hook per complete instruction — the prefixed opcodes re-enter
+       EXEC and would fire twice. */
+    if (cpu_hook)
+      cpu_hook(HOOK_Z80_E, 0, PC, 0);
+#endif
+
     Z80.after_ei = FALSE;
     R++;
     EXEC_INLINE(op,ROP());

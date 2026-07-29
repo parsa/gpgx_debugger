@@ -253,8 +253,12 @@ std::string BridgeServer::handle(const std::string& line)
 
     if (cmd == "pause")  { be->pause();    return "ok"; }
     if (cmd == "resume") { be->resume();   return "ok"; }
-    if (cmd == "stepi")  { be->stepInto(); return "ok"; }
-    if (cmd == "stepo")  { be->stepOver(); return "ok"; }
+    // optional trailing "z80" selects the sound CPU
+    if (cmd == "stepi" || cmd == "stepo") {
+        const Cpu cpu = (arg() == "z80") ? Cpu::Z80 : Cpu::M68K;
+        if (cmd == "stepi") be->stepInto(cpu); else be->stepOver(cpu);
+        return "ok";
+    }
 
     if (cmd == "pad") {
         be->setPad(0, (uint16_t)parseU32(arg()));

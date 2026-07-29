@@ -72,6 +72,15 @@ Z80Regs GpgxBackend::getZ80Regs()
     return r;
 }
 
+void GpgxBackend::setZ80Regs(const Z80Regs& r)
+{
+    Z80.af.w.l  = r.af;  Z80.bc.w.l  = r.bc;  Z80.de.w.l  = r.de;  Z80.hl.w.l  = r.hl;
+    Z80.af2.w.l = r.af2; Z80.bc2.w.l = r.bc2; Z80.de2.w.l = r.de2; Z80.hl2.w.l = r.hl2;
+    Z80.ix.w.l  = r.ix;  Z80.iy.w.l  = r.iy;  Z80.sp.w.l  = r.sp;  Z80.pc.w.l  = r.pc;
+    Z80.i = r.i; Z80.r = r.r; Z80.im = r.im;
+    Z80.iff1 = r.iff1; Z80.iff2 = r.iff2; Z80.halt = r.halt;
+}
+
 VdpState GpgxBackend::getVdpState()
 {
     VdpState v{};
@@ -337,6 +346,7 @@ int GpgxBackend::addBreakpoint(const Breakpoint& bp)
     std::lock_guard<std::mutex> lk(bpMutex_);
     Breakpoint b = bp; b.id = nextBpId_++;
     breakpoints_.push_back(b);
+    bpCount_.store(int(breakpoints_.size()), std::memory_order_relaxed);
     return b.id;
 }
 void GpgxBackend::removeBreakpoint(int id)
@@ -344,8 +354,9 @@ void GpgxBackend::removeBreakpoint(int id)
     std::lock_guard<std::mutex> lk(bpMutex_);
     breakpoints_.erase(std::remove_if(breakpoints_.begin(), breakpoints_.end(),
         [id](const Breakpoint& b){ return b.id == id; }), breakpoints_.end());
+    bpCount_.store(int(breakpoints_.size()), std::memory_order_relaxed);
 }
-void GpgxBackend::clearBreakpoints() { std::lock_guard<std::mutex> lk(bpMutex_); breakpoints_.clear(); }
+void GpgxBackend::clearBreakpoints() { std::lock_guard<std::mutex> lk(bpMutex_); breakpoints_.clear(); bpCount_.store(0, std::memory_order_relaxed); }
 std::vector<Breakpoint> GpgxBackend::getBreakpoints() { std::lock_guard<std::mutex> lk(bpMutex_); return breakpoints_; }
 
 // ---------------------------------------------------------------------------
@@ -353,10 +364,17 @@ std::vector<Breakpoint> GpgxBackend::getBreakpoints() { std::lock_guard<std::mut
 // ---------------------------------------------------------------------------
 void GpgxBackend::pause()   { stepInto_.store(true); }
 void GpgxBackend::resume()  { paused_.store(false); if (resumeCb_) resumeCb_(); }
-void GpgxBackend::stepInto(){ paused_.store(false); stepInto_.store(true); }
-
-void GpgxBackend::stepOver()
+void GpgxBackend::stepInto(Cpu cpu)
 {
+    paused_.store(false);
+    if (cpu == Cpu::Z80) stepIntoZ80_.store(true);
+    else                 stepInto_.store(true);
+}
+
+void GpgxBackend::stepOver(Cpu cpu)
+{
+    if (cpu == Cpu::Z80) { stepOverZ80(); return; }
+
     uint32_t pc = m68k_get_reg(M68K_REG_PC);
     const cpu_memory_map* map = &m68k.memory_map[(pc >> 16) & 0xFF];
     uint16_t opc = 0;
@@ -419,7 +437,7 @@ bool GpgxBackend::loadRom(const char* path)
     static std::vector<uint8_t> framebuffer(720 * 576 * 4, 0);
     gx::bitmap_data() = framebuffer.data();
 
-    { std::lock_guard<std::mutex> lk(callstackMutex_); callstack_.clear(); }
+    { std::lock_guard<std::mutex> lk(callstackMutex_); callstack_.clear(); callstackZ80_.clear(); }
 
     bool ok = gx::load_rom(path);
     if (ok) running_.store(true);
@@ -445,6 +463,8 @@ void GpgxBackend::onCpuHook(int type, int /*width*/, uint32_t addr, uint32_t /*v
         if (brk) firePause(addr);
     } else if (type & (HOOK_M68K_R | HOOK_M68K_W)) {
         if (matchBreakpoint(type, addr)) firePause(lastPc_);
+    } else if (type & HOOK_Z80_E) {
+        onZ80Exec(addr & 0xFFFF);
     } else if (type & (HOOK_VRAM_R | HOOK_VRAM_W | HOOK_CRAM_R | HOOK_CRAM_W |
                        HOOK_VSRAM_R | HOOK_VSRAM_W)) {
         // The core reports an offset within one VDP memory; breakpoints live in
@@ -464,10 +484,10 @@ std::map<uint32_t, uint32_t> GpgxBackend::takeCodemap()
     return out;
 }
 
-void GpgxBackend::firePause(uint32_t pc)
+void GpgxBackend::firePause(uint32_t pc, Cpu cpu)
 {
     paused_.store(true);
-    if (pauseCb_) pauseCb_(pc);
+    if (pauseCb_) pauseCb_(pc, cpu);
     // Block the emulation thread until resumed. While blocked, pump host
     // commands (resume/step/read) so run-control can proceed — nested-loop
     // model of the original Gens debugger.
@@ -479,6 +499,8 @@ void GpgxBackend::firePause(uint32_t pc)
 
 bool GpgxBackend::matchBreakpoint(int type, uint32_t addr)
 {
+    if (bpCount_.load(std::memory_order_relaxed) == 0) return false;   // hot path
+
     // A VDP access carries an address in the VDP linear space, so it may only
     // match breakpoints marked is_vdp — and a bus breakpoint must never be
     // triggered by one. Without this the two address spaces alias and VDP
@@ -486,10 +508,13 @@ bool GpgxBackend::matchBreakpoint(int type, uint32_t addr)
     const bool vdpAccess = (type & (HOOK_VRAM_R | HOOK_VRAM_W |
                                     HOOK_CRAM_R | HOOK_CRAM_W |
                                     HOOK_VSRAM_R | HOOK_VSRAM_W)) != 0;
+    // Both CPUs live in one address space as far as a bare number goes, so a
+    // breakpoint must name its processor or a Z80 address matches 68000 code.
+    const Cpu cpu = (type & (HOOK_Z80_E | HOOK_Z80_R | HOOK_Z80_W)) ? Cpu::Z80 : Cpu::M68K;
 
     const bool isRead  = (type & (HOOK_M68K_R | HOOK_VRAM_R | HOOK_CRAM_R | HOOK_VSRAM_R)) != 0;
     const bool isWrite = (type & (HOOK_M68K_W | HOOK_VRAM_W | HOOK_CRAM_W | HOOK_VSRAM_W)) != 0;
-    const bool isExec  = (type & HOOK_M68K_E) != 0;
+    const bool isExec  = (type & (HOOK_M68K_E | HOOK_Z80_E)) != 0;
 
     // Collect matches under the lock, evaluate conditions outside it: the
     // evaluator calls into the client (IDA), which must not be done while
@@ -499,6 +524,7 @@ bool GpgxBackend::matchBreakpoint(int type, uint32_t addr)
         std::lock_guard<std::mutex> lk(bpMutex_);
         for (const auto& bp : breakpoints_) {
             if (!bp.enabled) continue;
+            if (bp.cpu != cpu) continue;
             if (bp.is_vdp != vdpAccess) continue;
             const bool typeOk = (bp.type == BpType::PC    && isExec)
                              || (bp.type == BpType::Read  && isRead)
@@ -517,6 +543,97 @@ bool GpgxBackend::matchBreakpoint(int type, uint32_t addr)
     for (const auto& c : pending)
         if (condEval_(c.first, c.second)) return true;
     return false;
+}
+
+
+// ---------------------------------------------------------------------------
+// Z80
+//
+// Deliberately parallel to the 68000 path rather than shared: the two CPUs run
+// interleaved on one thread, and mixing their step flags, PCs or callstacks
+// means whichever executes more instructions (always the Z80) wins every race.
+// lastPcZ80_ is likewise separate — feeding Z80 addresses into the 68000
+// codemap would have IDA turn sound-RAM offsets into 68000 code.
+// ---------------------------------------------------------------------------
+uint8_t GpgxBackend::z80ByteAt(uint16_t pc) const
+{
+    return (pc < 0x2000) ? zram[pc] : 0;   // table read: never touch IO handlers
+}
+
+void GpgxBackend::trackZ80Call(uint16_t pc)
+{
+    const uint8_t op = z80ByteAt(pc);
+    bool call = false, ret = false;
+    switch (op) {
+    // CALL nn and its conditional forms, plus the RST one-byte calls
+    case 0xCD: case 0xDC: case 0xFC: case 0xD4: case 0xC4:
+    case 0xF4: case 0xEC: case 0xE4: case 0xCC:
+    case 0xC7: case 0xCF: case 0xD7: case 0xDF:
+    case 0xE7: case 0xEF: case 0xF7: case 0xFF:
+        call = true; break;
+    case 0xC9: case 0xD8: case 0xF8: case 0xD0: case 0xC0:
+    case 0xF0: case 0xE8: case 0xE0: case 0xC8:
+        ret = true; break;
+    case 0xED:                                   // reti / retn
+        if (z80ByteAt(uint16_t(pc + 1)) == 0x4D || z80ByteAt(uint16_t(pc + 1)) == 0x45)
+            ret = true;
+        break;
+    default: break;
+    }
+    if (!call && !ret) return;
+
+    std::lock_guard<std::mutex> lk(callstackMutex_);
+    if (call) { if (callstackZ80_.size() < 256) callstackZ80_.push_back(pc); }
+    else if (!callstackZ80_.empty()) callstackZ80_.pop_back();
+}
+
+void GpgxBackend::stepOverZ80()
+{
+    const uint16_t pc = Z80.pc.w.l;
+    const uint8_t  op = z80ByteAt(pc);
+    int len = 0;
+    switch (op) {
+    case 0xCD: case 0xDC: case 0xFC: case 0xD4: case 0xC4:
+    case 0xF4: case 0xEC: case 0xE4: case 0xCC:
+        len = 3; break;                                   // CALL nn
+    case 0xC7: case 0xCF: case 0xD7: case 0xDF:
+    case 0xE7: case 0xEF: case 0xF7: case 0xFF:
+        len = 1; break;                                   // RST n
+    case 0xED:
+        if (z80ByteAt(uint16_t(pc + 1)) == 0xB0) len = 2; // LDIR: stepping it is a loop
+        break;
+    default: break;
+    }
+    if (len == 0) { stepInto(Cpu::Z80); return; }         // nothing to step over
+
+    stepOverAddrZ80_.store(int(uint16_t(pc + len)));
+    paused_.store(false);
+    if (resumeCb_) resumeCb_();
+}
+
+void GpgxBackend::onZ80Exec(uint32_t pc)
+{
+    // A HALT re-executes its own address; without this a breakpoint on it would
+    // fire again the moment we resume, and never let go.
+    const int skip = z80ResumeSkip_.load();
+    if (skip >= 0) {
+        if (uint32_t(skip) == pc) return;
+        z80ResumeSkip_.store(-1);
+    }
+
+    lastPcZ80_ = pc;
+    trackZ80Call(uint16_t(pc));
+
+    bool brk = stepIntoZ80_.exchange(false);
+    if (!brk) {
+        const int so = stepOverAddrZ80_.load();
+        if (so >= 0 && uint32_t(so) == pc) { stepOverAddrZ80_.store(-1); brk = true; }
+    }
+    if (!brk) brk = matchBreakpoint(HOOK_Z80_E, pc);
+    if (brk) {
+        z80ResumeSkip_.store(int(pc));
+        firePause(pc, Cpu::Z80);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -548,8 +665,8 @@ void GpgxBackend::trackCall(uint32_t pc)
     }
 }
 
-std::vector<uint32_t> GpgxBackend::getCallstack()
+std::vector<uint32_t> GpgxBackend::getCallstack(Cpu cpu)
 {
     std::lock_guard<std::mutex> lk(callstackMutex_);
-    return callstack_;
+    return (cpu == Cpu::Z80) ? callstackZ80_ : callstack_;
 }

@@ -13,6 +13,7 @@ public:
     M68kRegs   getM68kRegs() override;
     void       setM68kRegs(const M68kRegs&) override;
     Z80Regs    getZ80Regs() override;
+    void       setZ80Regs(const Z80Regs&) override;
     VdpState   getVdpState() override;
     void       setVdpReg(int idx, uint8_t value) override;
     SoundState getSoundState() override;
@@ -41,13 +42,13 @@ public:
     void removeBreakpoint(int id) override;
     void clearBreakpoints() override;
     std::vector<Breakpoint> getBreakpoints() override;
-    std::vector<uint32_t>   getCallstack() override;
+    std::vector<uint32_t>   getCallstack(Cpu cpu) override;
     void setConditionEvaluator(ConditionEval e) override { condEval_ = std::move(e); }
 
     void pause() override;
     void resume() override;
-    void stepInto() override;
-    void stepOver() override;
+    void stepInto(Cpu cpu) override;
+    void stepOver(Cpu cpu) override;
     bool isPaused() const override { return paused_.load(); }
 
     void onPaused(PauseCb cb)  override { pauseCb_  = std::move(cb); }
@@ -70,10 +71,14 @@ public:
     void setPausePump(std::function<void()> pump) { pausePump_ = std::move(pump); }
 
 private:
-    void firePause(uint32_t pc);
+    void firePause(uint32_t pc, Cpu cpu = Cpu::M68K);
     bool matchBreakpoint(int type, uint32_t addr);
     void trackCall(uint32_t pc);          // maintain callstack_ from the opcode at pc
     uint16_t opcodeAt(uint32_t pc) const;
+    void     onZ80Exec(uint32_t pc);
+    void     stepOverZ80();
+    void     trackZ80Call(uint16_t pc);
+    uint8_t  z80ByteAt(uint16_t pc) const;
 
     PauseCb  pauseCb_;
     ResumeCb resumeCb_;
@@ -84,9 +89,19 @@ private:
     std::atomic<bool> paused_   {false};
     std::atomic<bool> stepInto_ {false};
     std::atomic<int>  stepOverAddr_ {-1};
+    // The Z80 needs its own: it retires thousands of instructions per frame,
+    // so a step meant for the 68000 would be consumed by the wrong CPU.
+    std::atomic<bool> stepIntoZ80_ {false};
+    std::atomic<int>  stepOverAddrZ80_ {-1};
+    // A HALT re-executes the same address forever, so a breakpoint there would
+    // retrigger the instant it resumes. Skip one hit at the address we stopped.
+    std::atomic<int>  z80ResumeSkip_ {-1};
 
     std::mutex bpMutex_;
     std::vector<Breakpoint> breakpoints_;
+    // Read on every instruction of both CPUs, so the common "no breakpoints"
+    // case must not touch the mutex at all.
+    std::atomic<int> bpCount_ {0};
     int nextBpId_ = 1;
     uint32_t lastPc_ = 0;
 
@@ -96,6 +111,8 @@ private:
     ConditionEval condEval_;
     std::mutex            callstackMutex_;
     std::vector<uint32_t> callstack_;
+    std::vector<uint32_t> callstackZ80_;
+    uint32_t              lastPcZ80_ = 0;
 };
 
 extern GpgxBackend* g_gpgxBackend;

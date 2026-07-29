@@ -37,9 +37,10 @@ bool EmuHost::start(const std::string& romPath)
         drainCommands();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     });
-    backend_.onPaused([this](uint32_t pc) {
+    backend_.onPaused([this](uint32_t pc, Cpu cpu) {
         DebugEvent ev;
         ev.type = DebugEvent::Type::Paused;
+        ev.cpu = cpu;
         ev.pc = pc;
         ev.changed = backend_.takeCodemap();
         emitEvent(ev);
@@ -164,8 +165,8 @@ void EmuHost::dispatch(const DebugCommand& cmd)
     switch (cmd.op) {
     case Op::Pause:    backend_.pause();    break;
     case Op::Resume:   backend_.resume();   break;
-    case Op::StepInto: backend_.stepInto(); break;
-    case Op::StepOver: backend_.stepOver(); break;
+    case Op::StepInto: backend_.stepInto(cmd.cpu); break;
+    case Op::StepOver: backend_.stepOver(cmd.cpu); break;
     case Op::WriteMemory:
         if (!cmd.data.empty())
             backend_.writeMemory(cmd.addr, cmd.data.data(), (uint32_t)cmd.data.size());
@@ -176,6 +177,7 @@ void EmuHost::dispatch(const DebugCommand& cmd)
     case Op::AddBreakpoint: {
         Breakpoint bp;
         bp.type   = (BpType)cmd.bpType;
+        bp.cpu    = cmd.cpu;
         bp.is_vdp = cmd.bpIsVdp != 0;
         bp.start  = cmd.bpStart;
         bp.end    = cmd.bpEnd;

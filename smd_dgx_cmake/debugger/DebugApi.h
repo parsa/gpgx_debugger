@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "DebugState.h"   // Cpu
+
 // ---------------------------------------------------------------------------
 // Transport-agnostic debug protocol.
 //
@@ -33,6 +35,7 @@ struct DebugCommand {
         LoadRom, ExitEmulation,
     };
     Op       op{};
+    Cpu      cpu = Cpu::M68K;   // StepInto/StepOver/AddBreakpoint target
     uint32_t addr = 0;      // ReadMemory/WriteMemory
     uint32_t size = 0;
     int      index = 0;     // SetVdpReg reg index / RemoveBreakpoint id
@@ -53,7 +56,8 @@ struct DebugEvent {
         Stopped,        // emulator exiting; changed flushed one last time
     };
     Type     type{};
-    uint32_t pc = 0;
+    Cpu      cpu = Cpu::M68K;   // which processor stopped
+    uint32_t pc  = 0;
     std::map<uint32_t, uint32_t> changed;   // executed pc -> predecessor pc
 };
 

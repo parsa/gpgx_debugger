@@ -41,7 +41,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     buildMenus();
     buildDocks();
 
-    backend_->onPaused([this](uint32_t pc) {
+    backend_->onPaused([this](uint32_t pc, Cpu) {
         QMetaObject::invokeMethod(this, [this, pc]{ onPaused(pc); }, Qt::QueuedConnection);
     });
     backend_->onResumed([this]() {
@@ -248,5 +248,5 @@ void MainWindow::onResumed()
 
 void MainWindow::debugPause()   { if (emuHost_ && emuHost_->isRunning()) backend_->pause(); }
 void MainWindow::debugResume()  { backend_->resume(); }
-void MainWindow::debugStepInto(){ backend_->stepInto(); }
-void MainWindow::debugStepOver(){ backend_->stepOver(); }
+void MainWindow::debugStepInto(){ backend_->stepInto(Cpu::M68K); }
+void MainWindow::debugStepOver(){ backend_->stepOver(Cpu::M68K); }
