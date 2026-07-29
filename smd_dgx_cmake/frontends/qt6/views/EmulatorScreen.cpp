@@ -20,28 +20,51 @@ EmulatorScreen::EmulatorScreen(QWidget* parent) : QWidget(parent)
 // --------------------------------------------------------------------------
 // input
 // --------------------------------------------------------------------------
+// Letter keys are matched by physical position, not by the character they
+// produce: Qt::Key_Z is whatever key types "z" in the current layout, so on a
+// Russian (or French, or Dvorak) layout the face buttons would move or vanish.
+// Scan codes are layout-independent but platform-specific, hence the table.
+namespace {
+#if defined(Q_OS_WIN)
+enum : quint32 { SC_A = 0x1E, SC_S = 0x1F, SC_D = 0x20,
+                 SC_Z = 0x2C, SC_X = 0x2D, SC_C = 0x2E };
+#elif defined(Q_OS_MACOS)
+enum : quint32 { SC_A = 0x00, SC_S = 0x01, SC_D = 0x02,
+                 SC_Z = 0x06, SC_X = 0x07, SC_C = 0x08 };
+#else   // X11/xkb: keycode == PS/2 scan code + 8
+enum : quint32 { SC_A = 0x26, SC_S = 0x27, SC_D = 0x28,
+                 SC_Z = 0x34, SC_X = 0x35, SC_C = 0x36 };
+#endif
+} // namespace
+
 void EmulatorScreen::applyKey(QKeyEvent* e, bool pressed)
 {
     if (e->isAutoRepeat()) { e->accept(); return; }
 
     uint16_t bit = 0;
+    // Arrows, Enter and Backspace carry the same Qt key code in every layout,
+    // so they are matched directly.
     switch (e->key()) {
     case Qt::Key_Up:        bit = PAD_UP;    break;
     case Qt::Key_Down:      bit = PAD_DOWN;  break;
     case Qt::Key_Left:      bit = PAD_LEFT;  break;
     case Qt::Key_Right:     bit = PAD_RIGHT; break;
-    case Qt::Key_Z:         bit = PAD_A;     break;
-    case Qt::Key_X:         bit = PAD_B;     break;
-    case Qt::Key_C:         bit = PAD_C;     break;
-    case Qt::Key_A:         bit = PAD_X;     break;
-    case Qt::Key_S:         bit = PAD_Y;     break;
-    case Qt::Key_D:         bit = PAD_Z;     break;
     case Qt::Key_Return:
     case Qt::Key_Enter:     bit = PAD_START; break;
     case Qt::Key_Backspace: bit = PAD_MODE;  break;
     default:
-        e->ignore();
-        return;
+        switch (e->nativeScanCode()) {
+        case SC_Z: bit = PAD_A; break;
+        case SC_X: bit = PAD_B; break;
+        case SC_C: bit = PAD_C; break;
+        case SC_A: bit = PAD_X; break;
+        case SC_S: bit = PAD_Y; break;
+        case SC_D: bit = PAD_Z; break;
+        default:
+            e->ignore();
+            return;
+        }
+        break;
     }
 
     pad_ = pressed ? (pad_ | bit) : (uint16_t)(pad_ & ~bit);
