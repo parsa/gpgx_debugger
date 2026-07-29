@@ -38,7 +38,7 @@ add_library(smd_dgx_ida SHARED
   ida_patch.cpp        # ROM patching, IDA side (no Qt)
   ida_asm.cpp          # constant decoding for the listing
   ida_registers.h
-  $<$<BOOL:${WIN32}>:${CMAKE_CURRENT_LIST_DIR}/../platform/AudioOutput.cpp>
+  "${CMAKE_CURRENT_LIST_DIR}/../platform/AudioOutput.cpp"
 )
 target_include_directories(smd_dgx_ida PRIVATE
   "${IDA_SDK_DIR}/include"

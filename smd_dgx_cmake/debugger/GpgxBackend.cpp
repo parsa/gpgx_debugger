@@ -363,9 +363,43 @@ void GpgxBackend::stepOver()
     // storage is word-swapped on LE hosts: logical hi byte lives at addr^1
     if (map->base) opc = (static_cast<uint16_t>(map->base[(pc & 0xFFFF) ^ 1]) << 8) | map->base[((pc+1) & 0xFFFF) ^ 1];
     if ((opc & 0xFFC0) == 0x4E80) {
-        int off = 1, mod = (opc >> 3) & 7;
-        if (mod == 5) off++; else if (mod == 7) { off += (opc & 7) == 1 ? 2 : 1; }
-        stepOverAddr_.store(static_cast<int>(pc + off * 2));
+        // jsr <ea>: how far to step depends on the addressing mode, since the
+        // extension words are part of the instruction. Getting this wrong sets
+        // the resume address inside the operand and the step never lands.
+        const int mod = (opc >> 3) & 7;
+        const int reg = opc & 7;
+        int words = 1;                       // the opcode itself
+
+        auto countExtension = [&] {
+            // Brief format is one word. Bit 8 selects the 68020 full format,
+            // which a 68000 never produces — handled anyway so a 68020 database
+            // does not mis-step.
+            const uint16_t ext = opcodeAt(pc + 2);
+            words += 1;
+            if (ext & 0x0100) {
+                const int bd = (ext >> 4) & 3;   // base displacement
+                const int od = ext & 3;          // outer displacement
+                if (bd == 2) words += 1; else if (bd == 3) words += 2;
+                if (od == 2) words += 1; else if (od == 3) words += 2;
+            }
+        };
+
+        switch (mod) {
+        case 2: break;                       // (An)
+        case 5: words += 1; break;           // (d16,An)
+        case 6: countExtension(); break;     // (d8,An,Xn)
+        case 7:
+            switch (reg) {
+            case 0: words += 1; break;       // (xxx).W
+            case 1: words += 2; break;       // (xxx).L
+            case 2: words += 1; break;       // (d16,PC)
+            case 3: countExtension(); break; // (d8,PC,Xn)
+            default: break;
+            }
+            break;
+        default: break;                      // not a valid jsr destination
+        }
+        stepOverAddr_.store(static_cast<int>(pc + words * 2));
     } else if ((opc & 0xFF00) == 0x6100) {
         int off = (opc & 0xFF) == 0 ? 2 : (opc & 0xFF) == 0xFF ? 3 : 1;
         stepOverAddr_.store(static_cast<int>(pc + off * 2));

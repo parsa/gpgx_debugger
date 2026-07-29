@@ -1,32 +1,34 @@
 #pragma once
 #include <cstdint>
-#define NOMINMAX
-#include <windows.h>
-#include <mmsystem.h>
+#include <memory>
 
+// Audio device for the emulator hosts.
+//
+// The interface is deliberately platform-neutral: this header used to pull in
+// <windows.h>, so every host that merely wanted sound stopped compiling
+// anywhere else. The backend now lives entirely in the .cpp behind a pimpl —
+// waveOut on Windows, a silent stub elsewhere until a real backend exists.
 class AudioOutput
 {
 public:
-    static constexpr int kSampleRate  = 48000;
-    static constexpr int kChannels    = 2;
-    static constexpr int kBufFrames   = 2048;   // samples per buffer
-    static constexpr int kNumBufs     = 4;
+    static constexpr int kSampleRate = 48000;
+    static constexpr int kChannels   = 2;
 
     AudioOutput();
     ~AudioOutput();
 
+    AudioOutput(const AudioOutput&)            = delete;
+    AudioOutput& operator=(const AudioOutput&) = delete;
+
+    // Interleaved stereo frames, written from the emulation thread.
     void write(const int16_t* stereo, int frameCount);
     void pause(bool p);
 
-private:
-    static void CALLBACK waveOutProc(HWAVEOUT, UINT msg, DWORD_PTR inst, DWORD_PTR, DWORD_PTR);
-    void freeBuffer(int idx);
-    int  nextBuf() { return (head_ + 1) % kNumBufs; }
+    // False when no device could be opened, or the platform has no backend;
+    // hosts keep running, just silently.
+    bool isOpen() const;
 
-    HWAVEOUT    hwo_    = nullptr;
-    WAVEHDR     hdr_[kNumBufs]{};
-    int16_t     buf_[kNumBufs][kBufFrames * kChannels]{};
-    HANDLE      event_  = nullptr;
-    int         head_   = 0;
-    int         queued_ = 0;
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };

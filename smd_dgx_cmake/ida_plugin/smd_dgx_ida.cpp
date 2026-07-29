@@ -28,9 +28,7 @@
 // emulator (NO Qt here)
 #include "debugger/EmuHost.h"
 #include "debugger/BridgeServer.h"
-#ifdef _WIN32
 #include "platform/AudioOutput.h"
-#endif
 
 #include "ida_registers.h"
 
@@ -88,11 +86,9 @@ struct BpKey {
 };
 std::map<BpKey, int> g_bpIds;
 
-#ifdef _WIN32
 // Audio device, alive for as long as the emulator runs. Written to from the
 // emulation thread only (via the audio sink), created/destroyed around it.
 AudioOutput* g_audio = nullptr;
-#endif
 
 // Control socket for external agents (the MCP server). Loopback only.
 BridgeServer* g_bridge = nullptr;
@@ -144,11 +140,9 @@ void on_emu_event(const DebugEvent& ev)
         break;
     }
     case DebugEvent::Type::Paused:
-#ifdef _WIN32
         // Nothing refills the device while suspended; silence it instead of
         // letting the last buffers drone on.
         if (g_audio) g_audio->pause(true);
-#endif
         apply_codemap(ev.changed);
         ida_ev.set_eid(PROCESS_SUSPENDED);
         ida_ev.ea = ev.pc;
@@ -161,9 +155,7 @@ void on_emu_event(const DebugEvent& ev)
         g_events.enqueue(ida_ev);
         break;
     case DebugEvent::Type::Resumed:
-#ifdef _WIN32
         if (g_audio) g_audio->pause(false);
-#endif
         break;
     }
 }
