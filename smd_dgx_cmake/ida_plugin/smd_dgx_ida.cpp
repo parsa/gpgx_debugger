@@ -33,6 +33,10 @@
 
 #include "ida_registers.h"
 
+// ROM patching actions (ida_patch.cpp — IDA side, no Qt)
+void smd_dgx_register_patches();
+void smd_dgx_unregister_patches();
+
 #ifdef SMD_DGX_IDA_VIEWS
 // Qt-side view builder + IDA-side dock glue. Plain declarations only: this TU
 // must not see Qt headers (see ida_views_shared.h).
@@ -698,6 +702,7 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
 #ifdef SMD_DGX_IDA_VIEWS
         smd_dgx_register_views();
 #endif
+        smd_dgx_register_patches();
         msg(PLUGIN_NAME ": in-process GPGX debugger loaded\n");
     }
 
@@ -706,6 +711,7 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
 #ifdef SMD_DGX_IDA_VIEWS
         smd_dgx_unregister_views();
 #endif
+        smd_dgx_unregister_patches();
         delete g_bridge; g_bridge = nullptr;
         if (g_host) { g_host->stop(); delete g_host; g_host = nullptr; }
         stop_audio();
