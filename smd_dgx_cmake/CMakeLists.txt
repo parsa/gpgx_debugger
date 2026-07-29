@@ -155,5 +155,6 @@ endif()
 
 set_target_properties(smd_dgx_cmake PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
 
-# ---- IDA 9.2+ debugger plugin (optional, gated on IDA_SDK_DIR) ----
-add_subdirectory(ida_plugin)
+# ---- IDA 9.2+ modules (optional, gated on IDA_SDK_DIR) ----
+add_subdirectory(ida_plugin)   # debugger plugin; also locates IDA_LIB
+add_subdirectory(ida_loader)   # ROM loader (uses IDA_LIB found above)
