@@ -2,6 +2,7 @@
 #include <QWidget>
 #include <QString>
 #include <QVector>
+#include <QDateTime>
 #include "debugger/IDebugBackend.h"
 
 QT_BEGIN_NAMESPACE
@@ -60,6 +61,7 @@ private:
 
     IDebugBackend*  backend_ = nullptr;
     QString         dir_;
+    QDateTime       indexStamp_;      // index mtime we last read
     QVector<Entry>  entries_;
 
     QTreeWidget* tree_    = nullptr;

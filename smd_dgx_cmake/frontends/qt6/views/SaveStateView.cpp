@@ -16,6 +16,8 @@
 #include <QFile>
 #include <QTextStream>
 #include <QDateTime>
+#include <QFileInfo>
+#include <QScopeGuard>
 #include <QFont>
 #include <QSet>
 
@@ -73,6 +75,7 @@ void SaveStateView::setStatesDir(const QString& dir)
 {
     if (dir_ == dir) return;
     dir_ = dir;
+    indexStamp_ = QDateTime();
     loadIndex();
     rebuildTree();
     updateButtons();
@@ -119,6 +122,10 @@ void SaveStateView::loadIndex()
 bool SaveStateView::saveIndex()
 {
     if (dir_.isEmpty()) return false;
+    const QScopeGuard stamp([this] {          // our own write must not look foreign
+        const QFileInfo fi(QDir(dir_).filePath(QLatin1String(kIndexFile)));
+        indexStamp_ = fi.exists() ? fi.lastModified() : QDateTime();
+    });
     QDir().mkpath(dir_);
     QFile f(QDir(dir_).filePath(QLatin1String(kIndexFile)));
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) return false;
@@ -140,11 +147,14 @@ void SaveStateView::rebuildTree()
         if (!parent) {
             parent = new QTreeWidgetItem(tree_, { g });
             parent->setFirstColumnSpanned(true);
-            parent->setExpanded(true);
         }
         auto* item = new QTreeWidgetItem(parent, { e.name, e.taken });
         item->setData(0, Qt::UserRole, i);        // index into entries_
     }
+
+    // Expand only now: expanding an item that has no children yet does
+    // nothing, and the states would then sit hidden under a collapsed group.
+    tree_->expandAll();
 }
 
 SaveStateView::Entry* SaveStateView::selectedEntry()
@@ -175,7 +185,23 @@ void SaveStateView::updateButtons()
     else               hintLabel_->clear();
 }
 
-void SaveStateView::refresh() { updateButtons(); }
+void SaveStateView::refresh()
+{
+    // Re-read the index when it changed underneath us. This widget is not the
+    // only writer: the numbered slots, the MCP tools, a second instance of the
+    // view or a previous session all touch the same directory, and a list that
+    // silently lags behind them is worse than no list.
+    if (!dir_.isEmpty()) {
+        const QFileInfo fi(QDir(dir_).filePath(QLatin1String(kIndexFile)));
+        const QDateTime stamp = fi.exists() ? fi.lastModified() : QDateTime();
+        if (stamp != indexStamp_) {
+            indexStamp_ = stamp;
+            loadIndex();
+            rebuildTree();
+        }
+    }
+    updateButtons();
+}
 
 void SaveStateView::onSelectionChanged() { updateButtons(); }
 
