@@ -125,12 +125,9 @@ void on_emu_event(const DebugEvent& ev)
         mi.size = 0;
         mi.rebase_to = BADADDR;
         g_events.enqueue(ida_ev);
-
-        // initial pause right after start, like Gensida
-        debug_event_t sus = ida_ev;
-        sus.set_eid(PROCESS_SUSPENDED);                        // VERIFY-9.3
-        sus.ea = ev.pc;
-        g_events.enqueue(sus);
+        // No synthetic suspend here: start_process() requests a real pause, so
+        // the emulation thread reports PROCESS_SUSPENDED at the actual PC a
+        // moment later. Enqueueing one as well made IDA stop twice on startup.
         break;
     }
     case DebugEvent::Type::Paused:
