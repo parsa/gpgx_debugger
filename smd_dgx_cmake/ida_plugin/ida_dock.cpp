@@ -18,7 +18,7 @@ namespace {
 
 // View indices, in the order of smd_dgx_view_titles.
 enum {
-    V_SCREEN = 0, V_VDPRAM, V_VDPREG, V_SPRITES, V_PLANE,
+    V_SCREEN = 0, V_VDPRAM, V_VDPREG, V_SCROLL, V_SPRITES, V_PLANE,
     V_SOUND, V_HEX, V_SEARCH, V_WATCH,
 };
 
@@ -60,9 +60,10 @@ struct Preset {
 
 const Preset kPresets[] = {
     { "Graphics && VDP", V_VDPRAM, { V_VDPREG, V_SPRITES, V_PLANE, -1 }, V_SCREEN },
+    { "Scrolling",       V_SCROLL, { V_VDPREG, V_PLANE, -1, -1 },      V_SCREEN },
     { "Sound",           V_SOUND,  { -1, -1, -1, -1 },                   V_SCREEN },
     { "Memory",          V_HEX,    { V_SEARCH, V_WATCH, -1, -1 },        V_SCREEN },
-    { "Everything",      V_VDPRAM, { V_VDPREG, V_SPRITES, V_PLANE, V_SOUND }, V_HEX },
+    { "Everything",      V_VDPRAM, { V_VDPREG, V_SCROLL, V_PLANE, V_SOUND }, V_HEX },
 };
 constexpr int kPresetCount = int(sizeof(kPresets) / sizeof(kPresets[0]));
 

@@ -8,7 +8,7 @@
 // Neither side includes the other's toolkit headers — only this plain header.
 
 // Number of dock views and their titles (defined in ida_views.cpp).
-constexpr int SMD_DGX_VIEW_COUNT = 9;
+constexpr int SMD_DGX_VIEW_COUNT = 10;
 extern const char* const smd_dgx_view_titles[SMD_DGX_VIEW_COUNT];
 
 // Frame sink target: forwards an emulator frame to the "Screen" view if it is

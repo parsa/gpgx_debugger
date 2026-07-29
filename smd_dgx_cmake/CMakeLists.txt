@@ -112,6 +112,8 @@ if (Qt6_FOUND)
     "${GX_PLATFORM_QT6}/views/EmulatorScreen.cpp"
     "${GX_PLATFORM_QT6}/views/VdpRegView.h"
     "${GX_PLATFORM_QT6}/views/VdpRegView.cpp"
+    "${GX_PLATFORM_QT6}/views/ScrollView.h"
+    "${GX_PLATFORM_QT6}/views/ScrollView.cpp"
     "${GX_PLATFORM_QT6}/views/VdpRamView.h"
     "${GX_PLATFORM_QT6}/views/VdpRamView.cpp"
     "${GX_PLATFORM_QT6}/views/VdpSpritesView.h"

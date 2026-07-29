@@ -17,6 +17,7 @@
 #include "ida_views_shared.h"
 
 #include "views/EmulatorScreen.h"
+#include "views/ScrollView.h"
 #include "views/VdpRamView.h"
 #include "views/VdpRegView.h"
 #include "views/VdpSpritesView.h"
@@ -32,6 +33,7 @@ const char* const smd_dgx_view_titles[SMD_DGX_VIEW_COUNT] = {
     "SMD Screen",
     "SMD VDP Ram",
     "SMD VDP Registers",
+    "SMD Scroll",
     "SMD VDP Sprites",
     "SMD Plane Explorer",
     "SMD YM2612 & PSG",
@@ -90,6 +92,7 @@ Dock g_docks[SMD_DGX_VIEW_COUNT] = {
     { &make_screen,                  &refresh_screen,                  {} },
     { &make_view<VdpRamView>,        &refresh_view<VdpRamView>,        {} },
     { &make_view<VdpRegView>,        &refresh_view<VdpRegView>,        {} },
+    { &make_view<ScrollView>,        &refresh_view<ScrollView>,        {} },
     { &make_view<VdpSpritesView>,    &refresh_view<VdpSpritesView>,    {} },
     { &make_view<PlaneExplorerView>, &refresh_view<PlaneExplorerView>, {} },
     { &make_view<SoundDebugView>,    &refresh_view<SoundDebugView>,    {} },

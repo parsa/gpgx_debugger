@@ -3,6 +3,7 @@
 #include "views/EmulatorScreen.h"
 #include "views/VdpRamView.h"
 #include "views/VdpRegView.h"
+#include "views/ScrollView.h"
 #include "views/VdpSpritesView.h"
 #include "views/PlaneExplorerView.h"
 #include "views/SoundDebugView.h"
@@ -89,6 +90,7 @@ void MainWindow::buildDocks()
 {
     vdpRamView_    = new VdpRamView(this);
     vdpRegView_    = new VdpRegView(this);
+    scrollView_    = new ScrollView(this);
     spritesView_   = new VdpSpritesView(this);
     planeView_     = new PlaneExplorerView(this);
     soundView_     = new SoundDebugView(this);
@@ -98,6 +100,7 @@ void MainWindow::buildDocks()
 
     vdpRamView_->setBackend(backend_);
     vdpRegView_->setBackend(backend_);
+    scrollView_->setBackend(backend_);
     spritesView_->setBackend(backend_);
     planeView_->setBackend(backend_);
     soundView_->setBackend(backend_);
@@ -124,8 +127,10 @@ void MainWindow::buildDocks()
     auto* dTiles   = addDock(QStringLiteral("VDP Ram"),        vdpRamView_,    Qt::RightDockWidgetArea,  true);
     auto* dRegs    = addDock(QStringLiteral("VDP Registers"),  vdpRegView_,    Qt::RightDockWidgetArea,  false);
     auto* dSprites = addDock(QStringLiteral("VDP Sprites"),    spritesView_,   Qt::RightDockWidgetArea,  false);
+    auto* dScroll  = addDock(QStringLiteral("Scroll"),         scrollView_,    Qt::RightDockWidgetArea,  false);
     tabifyDockWidget(dTiles, dRegs);
     tabifyDockWidget(dTiles, dSprites);
+    tabifyDockWidget(dTiles, dScroll);
     dTiles->raise();
 
     auto* dHex    = addDock(QStringLiteral("Hex Editor"),      hexView_,       Qt::BottomDockWidgetArea, true);
@@ -184,6 +189,7 @@ void MainWindow::refreshViews()
     auto refreshIfVisible = [](auto* v) { if (v && v->isVisible()) v->refresh(); };
     refreshIfVisible(vdpRamView_);
     refreshIfVisible(vdpRegView_);
+    refreshIfVisible(scrollView_);
     refreshIfVisible(spritesView_);
     refreshIfVisible(planeView_);
     refreshIfVisible(soundView_);
@@ -197,6 +203,7 @@ void MainWindow::onPaused(uint32_t pc)
     // On pause refresh everything, visible or not, so states are consistent
     vdpRamView_->refresh();
     vdpRegView_->refresh();
+    scrollView_->refresh();
     spritesView_->refresh();
     planeView_->refresh();
     soundView_->refresh();
