@@ -20,31 +20,7 @@ if (NOT EXISTS "${IDA_SDK_DIR}/include/ida.hpp")
   return()
 endif()
 
-# Per-platform SDK conventions: the library subdirectory, the compile define
-# IDA's headers switch on, and the extension IDA looks for when scanning
-# plugins/. Getting the last one wrong produces a module IDA silently ignores.
-if (WIN32)
-  set(IDA_LIB_HINTS "${IDA_SDK_DIR}/lib/x64_win_vc_64"        # licensed SDK layout
-                    "${IDA_SDK_DIR}/lib/x64_win_vc_64_teams"
-                    "${IDA_SDK_DIR}/lib/x64_win_64")          # open-source ida-sdk
-  set(IDA_PLATFORM_DEF __NT__)
-  set(IDA_MODULE_SUFFIX ".dll")
-  set(IDA_QT_LIB_DIR "${IDA_SDK_DIR}/lib/x64_win_qt")
-elseif (APPLE)
-  set(IDA_LIB_HINTS "${IDA_SDK_DIR}/lib/arm64_mac_clang_64"
-                    "${IDA_SDK_DIR}/lib/x64_mac_clang_64"
-                    "${IDA_SDK_DIR}/lib/arm64_mac_64"
-                    "${IDA_SDK_DIR}/lib/x64_mac_64")
-  set(IDA_PLATFORM_DEF __MAC__)
-  set(IDA_MODULE_SUFFIX ".dylib")
-  set(IDA_QT_LIB_DIR "${IDA_SDK_DIR}/lib/arm64_mac_qt" "${IDA_SDK_DIR}/lib/x64_mac_qt")
-else()
-  set(IDA_LIB_HINTS "${IDA_SDK_DIR}/lib/x64_linux_gcc_64"
-                    "${IDA_SDK_DIR}/lib/x64_linux_64")
-  set(IDA_PLATFORM_DEF __LINUX__)
-  set(IDA_MODULE_SUFFIX ".so")
-  set(IDA_QT_LIB_DIR "${IDA_SDK_DIR}/lib/x64_linux_qt")
-endif()
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ida_platform.cmake")
 
 find_library(IDA_LIB
   NAMES ida ida64

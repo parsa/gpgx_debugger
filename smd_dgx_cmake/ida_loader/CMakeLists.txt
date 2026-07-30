@@ -9,6 +9,10 @@ if (NOT IDA_SDK_DIR OR NOT IDA_LIB)
   return()
 endif()
 
+# Sibling subdirectories do not share variables, so the platform conventions
+# have to be included here too rather than inherited from ida_plugin/.
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ida_platform.cmake")
+
 add_library(smd_dgx_ldr SHARED
   smd_dgx_ldr.cpp
   smd_dgx_ldr.h
