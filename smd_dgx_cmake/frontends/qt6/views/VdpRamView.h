@@ -53,6 +53,7 @@ class VdpRamView : public QWidget {
     Q_OBJECT
 public:
     explicit VdpRamView(QWidget* parent = nullptr);
+    ~VdpRamView() override;                 // persists zoom / VRAM-vs-RAM
     void setBackend(IDebugBackend* b);
     void refresh();
     QSize sizeHint() const override { return {520, 480}; }

@@ -18,6 +18,7 @@ class RamWatchView : public QWidget {
     Q_OBJECT
 public:
     explicit RamWatchView(QWidget* parent = nullptr);
+    ~RamWatchView() override;               // autosaves the watch list
     void setBackend(IDebugBackend* b) { backend_ = b; }
     void refresh();
 

@@ -70,9 +70,18 @@ public:
     // of the original Gens debugger.
     void setPausePump(std::function<void()> pump) { pausePump_ = std::move(pump); }
 
+    // Abandon run control so the emulation thread can leave. Resuming alone is
+    // not enough to shut down: the very next instruction can hit the same
+    // breakpoint — or a still-armed step — and park the thread again, leaving
+    // the host waiting on a join that never comes. After this, pauses stop
+    // happening at all until the next loadRom.
+    void abortRunControl();
+
 private:
     void firePause(uint32_t pc, Cpu cpu = Cpu::M68K);
-    bool matchBreakpoint(int type, uint32_t addr);
+    // width = bytes touched by the access, so a breakpoint inside a word or
+    // longword access still matches.
+    bool matchBreakpoint(int type, uint32_t addr, int width = 1);
     void trackCall(uint32_t pc);          // maintain callstack_ from the opcode at pc
     uint16_t opcodeAt(uint32_t pc) const;
     void     onZ80Exec(uint32_t pc);
@@ -87,6 +96,7 @@ private:
 
     std::atomic<bool> running_  {false};
     std::atomic<bool> paused_   {false};
+    std::atomic<bool> abandoned_{false};   // shutting down: never park again
     std::atomic<bool> stepInto_ {false};
     std::atomic<int>  stepOverAddr_ {-1};
     // The Z80 needs its own: it retires thousands of instructions per frame,

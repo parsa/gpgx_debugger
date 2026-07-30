@@ -14,6 +14,7 @@
 #include "views/RamSearchView.h"
 #include "views/RamWatchView.h"
 #include "debugger/GpgxBackend.h"
+#include "ViewSettings.h"
 
 #include <QMenuBar>
 #include <QStatusBar>
@@ -30,7 +31,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     setWindowTitle(QStringLiteral("Genesis Plus GX Debugger"));
     resize(1440, 900);
 
-    backend_ = new GpgxBackend();
+    // One host for the window's whole life, restarted per ROM. It owns the only
+    // GpgxBackend in the process; see the note in MainWindow.h.
+    emuHost_ = new EmuHost();
+    backend_ = emuHost_->backend();
+
     screen_  = new EmulatorScreen(this);
     screen_->setBackend(backend_);      // controller input goes through it
     setCentralWidget(screen_);
@@ -54,20 +59,44 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     // runs are racy-but-benign, same as the original.
     refreshTimer_.setInterval(100);
     connect(&refreshTimer_, &QTimer::timeout, this, &MainWindow::refreshViews);
+
+    // Restore the window last: dock state can only be applied once every dock
+    // exists, and it is keyed on the object names set in buildDocks().
+    auto& s = viewsettings::store();
+    const QByteArray geom = s.value(QStringLiteral("Window/geometry")).toByteArray();
+    const QByteArray docks = s.value(QStringLiteral("Window/state")).toByteArray();
+    if (!geom.isEmpty())  restoreGeometry(geom);
+    if (!docks.isEmpty()) restoreState(docks);
 }
 
-MainWindow::~MainWindow() { stopEmulator(); }
+MainWindow::~MainWindow()
+{
+    stopEmulator();
+    delete emuHost_; emuHost_ = nullptr;
+    backend_ = nullptr;
+    // The views wrote their settings from their destructors as the widget tree
+    // came down; commit the file now.
+    viewsettings::flush();
+}
 
 void MainWindow::stopEmulator()
 {
-    // Before the host: the bridge's handlers hold an EmuHost*.
+    // Before the host: the bridge's handlers hold an EmuHost*, and its stop()
+    // deregisters the event sink that points back here.
     delete bridge_; bridge_ = nullptr;
-    if (emuHost_) { emuHost_->stop(); delete emuHost_; emuHost_ = nullptr; }
+    if (emuHost_) emuHost_->stop();
     delete audio_; audio_ = nullptr;      // outlives the host: the sink writes to it
+    refreshTimer_.stop();
 }
 
 void MainWindow::closeEvent(QCloseEvent* e)
 {
+    // Before the views are destroyed: each one persists its own state in its
+    // destructor, and flush() below has to see all of it.
+    auto& s = viewsettings::store();
+    s.setValue(QStringLiteral("Window/geometry"), saveGeometry());
+    s.setValue(QStringLiteral("Window/state"), saveState());
+
     stopEmulator();
     e->accept();
 }
@@ -154,8 +183,10 @@ void MainWindow::buildDocks()
 
 void MainWindow::openRom()
 {
+    const QString last = viewsettings::getString(QStringLiteral("Session"), QStringLiteral("lastRom"));
     QString path = QFileDialog::getOpenFileName(
-        this, QStringLiteral("Open ROM"), QString(),
+        this, QStringLiteral("Open ROM"),
+        last.isEmpty() ? QString() : QFileInfo(last).absolutePath(),
         QStringLiteral("ROM files (*.bin *.gen *.md *.smd);;All (*)"));
     if (path.isEmpty()) return;
     openRomFile(path);
@@ -174,8 +205,10 @@ void MainWindow::openRomFile(const QString& path)
         return;
     }
 
-    audio_   = new AudioOutput();
-    emuHost_ = new EmuHost();
+    audio_ = new AudioOutput();
+    if (!audio_->isOpen())
+        statusBar()->showMessage(QStringLiteral("No audio device — running silently"), 8000);
+
     emuHost_->setFrameSink([this](const uint8_t* d, int w, int h, int pitch,
                                   int vx, int vy, int vw, int vh) {
         screen_->pushFrame(d, w, h, pitch, vx, vy, vw, vh);   // takes its own lock
@@ -193,6 +226,11 @@ void MainWindow::openRomFile(const QString& path)
 
     // States live beside the ROM here; the IDA host puts them beside the database.
     statesView_->setStatesDir(fi.dir().filePath(fi.completeBaseName() + QStringLiteral("_states")));
+
+    // Remembered so File > Open starts where the last ROM came from, and so a
+    // future "reopen last" has something to work with.
+    viewsettings::putString(QStringLiteral("Session"), QStringLiteral("lastRom"), path);
+    viewsettings::flush();
 
     // Same control socket the IDA plugin serves, so the MCP tools work against
     // the standalone app too.

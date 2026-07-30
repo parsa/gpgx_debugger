@@ -1,4 +1,5 @@
 #include "RamWatchView.h"
+#include "ViewSettings.h"
 
 #include <QTableWidget>
 #include <QHeaderView>
@@ -19,7 +20,34 @@
 #include <QFont>
 #include <QColor>
 
-RamWatchView::RamWatchView(QWidget* parent) : QWidget(parent) { buildUi(); }
+// The watch list is the one piece of view state that represents work rather
+// than preference: it is built up address by address over an investigation.
+// It is round-tripped through the same .wch format the Open/Save buttons use,
+// so the autosave is an ordinary file the user can also load by hand — and
+// Gens can read it.
+static QString autoWatchPath()
+{
+    return viewsettings::dataDir() + QStringLiteral("/autosave.wch");
+}
+
+RamWatchView::RamWatchView(QWidget* parent) : QWidget(parent)
+{
+    buildUi();
+    if (QFile::exists(autoWatchPath()))
+        loadFile(autoWatchPath(), true);
+    // Not currentFile_: Save must not silently overwrite the autosave, and the
+    // title should not claim the user opened it.
+    currentFile_.clear();
+    rebuildTable();
+}
+
+RamWatchView::~RamWatchView()
+{
+    if (watches_.isEmpty())
+        QFile::remove(autoWatchPath());   // an emptied list must stay emptied
+    else
+        saveFile(autoWatchPath());
+}
 
 void RamWatchView::buildUi()
 {

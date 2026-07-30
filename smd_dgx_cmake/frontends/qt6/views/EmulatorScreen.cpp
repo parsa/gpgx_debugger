@@ -1,4 +1,5 @@
 #include "EmulatorScreen.h"
+#include "ViewSettings.h"
 #include <QPainter>
 #include <QMutexLocker>
 #include <QKeyEvent>
@@ -15,6 +16,19 @@ EmulatorScreen::EmulatorScreen(QWidget* parent) : QWidget(parent)
     // Needed to receive key events at all; click-to-focus so the host's other
     // panes keep working normally.
     setFocusPolicy(Qt::StrongFocus);
+
+    static const QString g = QStringLiteral("Screen");
+    integerScale_ = viewsettings::getBool(g, QStringLiteral("integerScale"), integerScale_);
+    smooth_       = viewsettings::getBool(g, QStringLiteral("smooth"),       smooth_);
+    keepAspect_   = viewsettings::getBool(g, QStringLiteral("keepAspect"),   keepAspect_);
+}
+
+EmulatorScreen::~EmulatorScreen()
+{
+    static const QString g = QStringLiteral("Screen");
+    viewsettings::putBool(g, QStringLiteral("integerScale"), integerScale_);
+    viewsettings::putBool(g, QStringLiteral("smooth"),       smooth_);
+    viewsettings::putBool(g, QStringLiteral("keepAspect"),   keepAspect_);
 }
 
 // --------------------------------------------------------------------------

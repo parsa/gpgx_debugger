@@ -103,22 +103,117 @@ void AudioOutput::pause(bool p)
 }
 
 // ===========================================================================
-// Everywhere else: no backend yet
+// Everywhere else: SDL2
 //
-// Deliberately silent rather than absent — the hosts are otherwise portable,
-// and refusing to build over the audio device would be the only thing keeping
-// them Windows-only. A real backend (SDL2, PulseAudio, CoreAudio) drops in
-// here without touching a single caller.
+// SDL2 is already a hard dependency of this build and the SDL frontend already
+// opens a device at the same rate, so this adds no dependency — it only stops
+// Linux and macOS being silent, which is the first thing a user notices and
+// the least defensible gap in a project whose first requirement was to be
+// cross-platform.
+//
+// SDL pulls from a callback on its own thread while the emulation thread
+// pushes, so the two meet in a ring buffer. write() drops the oldest audio
+// rather than blocking: the emulation thread must never be parked on the sound
+// card, and a debugger that is single-stepping produces samples in bursts that
+// no device pacing can follow.
 // ===========================================================================
 #else
 
-struct AudioOutput::Impl {};
+#include <SDL.h>
+#include <mutex>
 
-AudioOutput::AudioOutput() : impl_(new Impl) {}
-AudioOutput::~AudioOutput() = default;
+namespace {
+// Four frames at 60 Hz. Enough to ride out scheduling jitter, short enough
+// that resuming from a breakpoint does not replay a stale half-second.
+constexpr int kRingFrames = 8192;
+} // namespace
 
-bool AudioOutput::isOpen() const                    { return false; }
-void AudioOutput::write(const int16_t*, int)        {}
-void AudioOutput::pause(bool)                       {}
+struct AudioOutput::Impl {
+    SDL_AudioDeviceID dev = 0;
+    bool ownsSdl = false;
+
+    std::mutex mx;
+    int16_t ring[kRingFrames * AudioOutput::kChannels]{};
+    size_t  head = 0;          // next write
+    size_t  tail = 0;          // next read
+    size_t  fill = 0;          // frames available
+
+    static void SDLCALL feed(void* userdata, Uint8* stream, int len)
+    {
+        auto* self = static_cast<Impl*>(userdata);
+        auto* out = reinterpret_cast<int16_t*>(stream);
+        const size_t want = size_t(len) / sizeof(int16_t) / AudioOutput::kChannels;
+
+        std::lock_guard<std::mutex> lk(self->mx);
+        const size_t give = want < self->fill ? want : self->fill;
+        for (size_t i = 0; i < give; ++i) {
+            for (int ch = 0; ch < AudioOutput::kChannels; ++ch)
+                out[i * AudioOutput::kChannels + ch] =
+                    self->ring[self->tail * AudioOutput::kChannels + ch];
+            self->tail = (self->tail + 1) % kRingFrames;
+        }
+        self->fill -= give;
+        // Underrun: silence, not the previous buffer again. A repeated buffer
+        // is a recognisable buzz and sounds like a bug in the emulator.
+        std::memset(out + give * AudioOutput::kChannels, 0,
+                    (want - give) * AudioOutput::kChannels * sizeof(int16_t));
+    }
+};
+
+AudioOutput::AudioOutput() : impl_(new Impl)
+{
+    // The host may already have initialised SDL for video; init the subsystem
+    // we need and only quit the part we started.
+    if (SDL_WasInit(SDL_INIT_AUDIO) == 0) {
+        if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) return;
+        impl_->ownsSdl = true;
+    }
+
+    SDL_AudioSpec want{}, have{};
+    want.freq     = kSampleRate;
+    want.format   = AUDIO_S16SYS;
+    want.channels = kChannels;
+    want.samples  = 1024;
+    want.callback = &Impl::feed;
+    want.userdata = impl_.get();
+
+    impl_->dev = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
+    if (impl_->dev != 0) SDL_PauseAudioDevice(impl_->dev, 0);
+}
+
+AudioOutput::~AudioOutput()
+{
+    if (impl_->dev != 0) SDL_CloseAudioDevice(impl_->dev);
+    if (impl_->ownsSdl) SDL_QuitSubSystem(SDL_INIT_AUDIO);
+}
+
+bool AudioOutput::isOpen() const { return impl_->dev != 0; }
+
+void AudioOutput::write(const int16_t* stereo, int frameCount)
+{
+    if (impl_->dev == 0 || !stereo || frameCount <= 0) return;
+
+    std::lock_guard<std::mutex> lk(impl_->mx);
+    for (int i = 0; i < frameCount; ++i) {
+        if (impl_->fill == kRingFrames) {            // full: drop the oldest
+            impl_->tail = (impl_->tail + 1) % kRingFrames;
+            --impl_->fill;
+        }
+        for (int ch = 0; ch < kChannels; ++ch)
+            impl_->ring[impl_->head * kChannels + ch] = stereo[i * kChannels + ch];
+        impl_->head = (impl_->head + 1) % kRingFrames;
+        ++impl_->fill;
+    }
+}
+
+void AudioOutput::pause(bool p)
+{
+    if (impl_->dev == 0) return;
+    SDL_PauseAudioDevice(impl_->dev, p ? 1 : 0);
+    if (p) {                                          // drop what was queued
+        std::lock_guard<std::mutex> lk(impl_->mx);
+        impl_->head = impl_->tail = impl_->fill = 0;
+    }
+}
 
 #endif

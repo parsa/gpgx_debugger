@@ -1,4 +1,5 @@
 #include "RamSearchView.h"
+#include "ViewSettings.h"
 
 #include <QTableView>
 #include <QHeaderView>

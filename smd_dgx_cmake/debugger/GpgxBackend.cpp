@@ -87,8 +87,14 @@ VdpState GpgxBackend::getVdpState()
     VdpState v{};
     std::memcpy(v.reg, reg, sizeof(v.reg));
     v.status   = ::status;
-    v.dma_len  = (reg[20] & 0xFF) | ((reg[19] & 0xFF) << 8);
-    v.dma_src  = (reg[21] & 0xFF) | ((reg[22] & 0xFF) << 8) | ((reg[23] & 0x7F) << 16);
+    // reg 19 is the LOW half of the length and reg 20 the high one — the same
+    // order the core itself uses (vdp_ctrl.c: (reg[20] << 8) | reg[19]).
+    // Swapping them turns a 0x140-word transfer into a nonsensical 0x4001.
+    v.dma_len  = ((reg[20] & 0xFF) << 8) | (reg[19] & 0xFF);
+    // Registers 21-23 hold a *word* address; report the byte address, which is
+    // what every caller actually wants to compare against a memory map.
+    v.dma_src  = (uint32_t((reg[21] & 0xFF) | ((reg[22] & 0xFF) << 8)
+                           | ((reg[23] & 0x7F) << 16)) << 1) & 0xFFFFFF;
     v.dma_type = ::dma_type;
     v.vram  = ::vram;
     v.cram  = ::cram;
@@ -453,6 +459,7 @@ bool GpgxBackend::loadRom(const char* path)
     gx::bitmap_data() = framebuffer.data();
 
     { std::lock_guard<std::mutex> lk(callstackMutex_); callstack_.clear(); callstackZ80_.clear(); }
+    abandoned_.store(false);        // a previous shutdown must not mute this run
 
     bool ok = gx::load_rom(path);
     if (ok) running_.store(true);
@@ -462,7 +469,7 @@ bool GpgxBackend::loadRom(const char* path)
 // ---------------------------------------------------------------------------
 // CPU hook
 // ---------------------------------------------------------------------------
-void GpgxBackend::onCpuHook(int type, int /*width*/, uint32_t addr, uint32_t /*value*/)
+void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t /*value*/)
 {
     if (type & HOOK_M68K_E) {
         // codemap: record predecessor of every executed ROM/RAM address
@@ -474,10 +481,10 @@ void GpgxBackend::onCpuHook(int type, int /*width*/, uint32_t addr, uint32_t /*v
         trackCall(addr);
         bool brk = stepInto_.exchange(false);
         if (!brk) { int so = stepOverAddr_.load(); if (so >= 0 && (uint32_t)so == addr) { stepOverAddr_.store(-1); brk = true; } }
-        if (!brk) brk = matchBreakpoint(type, addr);
+        if (!brk) brk = matchBreakpoint(type, addr, 2);   // opcode word
         if (brk) firePause(addr);
     } else if (type & (HOOK_M68K_R | HOOK_M68K_W)) {
-        if (matchBreakpoint(type, addr)) firePause(lastPc_);
+        if (matchBreakpoint(type, addr, width)) firePause(lastPc_);
     } else if (type & HOOK_Z80_E) {
         onZ80Exec(addr & 0xFFFF);
     } else if (type & (HOOK_VRAM_R | HOOK_VRAM_W | HOOK_CRAM_R | HOOK_CRAM_W |
@@ -487,7 +494,7 @@ void GpgxBackend::onCpuHook(int type, int /*width*/, uint32_t addr, uint32_t /*v
         uint32_t linear = addr & 0xFFFF;
         if (type & (HOOK_CRAM_R  | HOOK_CRAM_W))  linear += VDP_BP_CRAM;
         else if (type & (HOOK_VSRAM_R | HOOK_VSRAM_W)) linear += VDP_BP_VSRAM;
-        if (matchBreakpoint(type, linear)) firePause(lastPc_);
+        if (matchBreakpoint(type, linear, width)) firePause(lastPc_);
     }
 }
 
@@ -499,20 +506,31 @@ std::map<uint32_t, uint32_t> GpgxBackend::takeCodemap()
     return out;
 }
 
+void GpgxBackend::abortRunControl()
+{
+    abandoned_.store(true);
+    stepInto_.store(false);
+    stepIntoZ80_.store(false);
+    stepOverAddr_.store(-1);
+    stepOverAddrZ80_.store(-1);
+    resume();
+}
+
 void GpgxBackend::firePause(uint32_t pc, Cpu cpu)
 {
+    if (abandoned_.load()) return;      // shutting down: do not park the thread
     paused_.store(true);
     if (pauseCb_) pauseCb_(pc, cpu);
     // Block the emulation thread until resumed. While blocked, pump host
     // commands (resume/step/read) so run-control can proceed — nested-loop
     // model of the original Gens debugger.
-    while (paused_.load()) {
+    while (paused_.load() && !abandoned_.load()) {
         if (pausePump_) pausePump_();
         else std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
 
-bool GpgxBackend::matchBreakpoint(int type, uint32_t addr)
+bool GpgxBackend::matchBreakpoint(int type, uint32_t addr, int width)
 {
     if (bpCount_.load(std::memory_order_relaxed) == 0) return false;   // hot path
 
@@ -545,7 +563,11 @@ bool GpgxBackend::matchBreakpoint(int type, uint32_t addr)
                              || (bp.type == BpType::Read  && isRead)
                              || (bp.type == BpType::Write && isWrite);
             if (!typeOk) continue;
-            if (addr < bp.start || addr > bp.end) continue;
+            // Overlap, not containment: a longword write at FF4276 touches
+            // FF4279, so a breakpoint on FF4278 has to see it. Comparing only
+            // the start address silently misses every unaligned access.
+            const uint32_t last = addr + uint32_t(width > 0 ? width - 1 : 0);
+            if (last < bp.start || addr > bp.end) continue;
 
             if (bp.condition.empty()) return true;          // unconditional: done
             pending.emplace_back(bp.elang, bp.condition);

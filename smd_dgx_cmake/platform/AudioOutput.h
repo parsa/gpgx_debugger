@@ -6,8 +6,8 @@
 //
 // The interface is deliberately platform-neutral: this header used to pull in
 // <windows.h>, so every host that merely wanted sound stopped compiling
-// anywhere else. The backend now lives entirely in the .cpp behind a pimpl —
-// waveOut on Windows, a silent stub elsewhere until a real backend exists.
+// anywhere else. The backend lives entirely in the .cpp behind a pimpl —
+// waveOut on Windows, SDL2 elsewhere.
 class AudioOutput
 {
 public:

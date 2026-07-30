@@ -66,6 +66,7 @@ private:
     std::atomic<bool> stopFlag_{ false };
     unsigned short    port_ = 0;
     long long         listenFd_ = -1;
+    int               sinkId_ = -1;     // our registration on the host
 
     std::mutex                            clientsMx_;
     std::vector<std::shared_ptr<Client>>  clients_;

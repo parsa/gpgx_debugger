@@ -1,4 +1,5 @@
 #include "PlaneExplorerView.h"
+#include "ViewSettings.h"
 #include <QPainter>
 #include <QMouseEvent>
 #include <QRadioButton>
@@ -18,6 +19,7 @@
 
 static constexpr int kBufW = 1024;
 static constexpr int kBufH = 1024;
+static const QString kGroup = QStringLiteral("PlaneExplorer");
 static const char kPlaneChar[4] = { 'A', 'B', 'W', 'S' };
 
 // ---------------------------------------------------------------- canvas ----
@@ -201,7 +203,23 @@ PlaneExplorerView::PlaneExplorerView(QWidget* parent) : QWidget(parent)
     main->addLayout(left);
     main->addWidget(scrollArea_, 1);
 
+    // Restore the tool's own state. Setting the widgets rather than the fields
+    // lets their signals do the rest, so there is one path into every setting
+    // and no chance of the controls disagreeing with what is drawn.
+    const int plane = qBound(0, viewsettings::getInt(kGroup, QStringLiteral("plane"), 0), 3);
+    radios_[plane]->setChecked(true);
+    onPlane(plane);
+    transCheck_->setChecked(viewsettings::getBool(kGroup, QStringLiteral("transparency"), false));
+    zoomSpin_->setValue(qBound(1, viewsettings::getInt(kGroup, QStringLiteral("zoom"), 1), 8));
+
     updateControls();
+}
+
+PlaneExplorerView::~PlaneExplorerView()
+{
+    viewsettings::putInt(kGroup,  QStringLiteral("plane"), plane_);
+    viewsettings::putBool(kGroup, QStringLiteral("transparency"), showTrans_);
+    viewsettings::putInt(kGroup,  QStringLiteral("zoom"), zoom_);
 }
 
 void PlaneExplorerView::setBackend(IDebugBackend* b)

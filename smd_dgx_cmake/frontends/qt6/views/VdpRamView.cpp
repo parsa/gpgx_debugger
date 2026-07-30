@@ -1,4 +1,5 @@
 #include "VdpRamView.h"
+#include "ViewSettings.h"
 #include <QPainter>
 #include <QMouseEvent>
 #include <QVBoxLayout>
@@ -82,6 +83,8 @@ void VdpTilePreview::paintEvent(QPaintEvent*)
     QPainter p(this);
     v_->paintPreview(p);
 }
+
+static const QString kVdpRamGroup = QStringLiteral("VdpRam");
 
 // -------------------------------------------------------------------- view
 
@@ -184,7 +187,17 @@ VdpRamView::VdpRamView(QWidget* parent) : QWidget(parent)
     main->addLayout(left, 1);
     main->addWidget(rightW);
 
+    zoomSpin_->setValue(qBound(1, viewsettings::getInt(kVdpRamGroup, QStringLiteral("zoom"), zoom_), 8));
+    if (!viewsettings::getBool(kVdpRamGroup, QStringLiteral("vram"), true))
+        ramRadio_->setChecked(true);
+
     setControlsEnabled(false);
+}
+
+VdpRamView::~VdpRamView()
+{
+    viewsettings::putInt(kVdpRamGroup,  QStringLiteral("zoom"), zoom_);
+    viewsettings::putBool(kVdpRamGroup, QStringLiteral("vram"), isVram_);
 }
 
 void VdpRamView::setBackend(IDebugBackend* b)

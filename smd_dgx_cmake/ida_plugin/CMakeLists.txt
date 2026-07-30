@@ -20,15 +20,38 @@ if (NOT EXISTS "${IDA_SDK_DIR}/include/ida.hpp")
   return()
 endif()
 
+# Per-platform SDK conventions: the library subdirectory, the compile define
+# IDA's headers switch on, and the extension IDA looks for when scanning
+# plugins/. Getting the last one wrong produces a module IDA silently ignores.
+if (WIN32)
+  set(IDA_LIB_HINTS "${IDA_SDK_DIR}/lib/x64_win_vc_64"        # licensed SDK layout
+                    "${IDA_SDK_DIR}/lib/x64_win_vc_64_teams"
+                    "${IDA_SDK_DIR}/lib/x64_win_64")          # open-source ida-sdk
+  set(IDA_PLATFORM_DEF __NT__)
+  set(IDA_MODULE_SUFFIX ".dll")
+  set(IDA_QT_LIB_DIR "${IDA_SDK_DIR}/lib/x64_win_qt")
+elseif (APPLE)
+  set(IDA_LIB_HINTS "${IDA_SDK_DIR}/lib/arm64_mac_clang_64"
+                    "${IDA_SDK_DIR}/lib/x64_mac_clang_64"
+                    "${IDA_SDK_DIR}/lib/arm64_mac_64"
+                    "${IDA_SDK_DIR}/lib/x64_mac_64")
+  set(IDA_PLATFORM_DEF __MAC__)
+  set(IDA_MODULE_SUFFIX ".dylib")
+  set(IDA_QT_LIB_DIR "${IDA_SDK_DIR}/lib/arm64_mac_qt" "${IDA_SDK_DIR}/lib/x64_mac_qt")
+else()
+  set(IDA_LIB_HINTS "${IDA_SDK_DIR}/lib/x64_linux_gcc_64"
+                    "${IDA_SDK_DIR}/lib/x64_linux_64")
+  set(IDA_PLATFORM_DEF __LINUX__)
+  set(IDA_MODULE_SUFFIX ".so")
+  set(IDA_QT_LIB_DIR "${IDA_SDK_DIR}/lib/x64_linux_qt")
+endif()
+
 find_library(IDA_LIB
   NAMES ida ida64
-  HINTS "${IDA_SDK_DIR}/lib/x64_win_vc_64"        # licensed SDK layout
-        "${IDA_SDK_DIR}/lib/x64_win_vc_64_teams"
-        "${IDA_SDK_DIR}/lib/x64_win_64"           # open-source ida-sdk layout
-        "${IDA_SDK_DIR}/lib"
+  HINTS ${IDA_LIB_HINTS} "${IDA_SDK_DIR}/lib"
 )
 if (NOT IDA_LIB)
-  message(WARNING "IDA plugin: ida.lib not found under ${IDA_SDK_DIR}/lib — target skipped")
+  message(WARNING "IDA plugin: no ida library found under ${IDA_SDK_DIR}/lib — target skipped")
   return()
 endif()
 
@@ -40,23 +63,22 @@ add_library(smd_dgx_ida SHARED
   ida_patch.cpp        # ROM patching, IDA side (no Qt)
   ida_asm.cpp          # constant decoding for the listing
   ida_registers.h
-  "${CMAKE_CURRENT_LIST_DIR}/../platform/AudioOutput.cpp"
 )
 target_include_directories(smd_dgx_ida PRIVATE
   "${IDA_SDK_DIR}/include"
   "${CMAKE_CURRENT_LIST_DIR}/.."       # debugger/EmuHost.h etc.
 )
 target_compile_definitions(smd_dgx_ida PRIVATE
-  __NT__ __X64__ __EA64__
+  ${IDA_PLATFORM_DEF} __X64__ __EA64__
   NO_OBSOLETE_FUNCS
 )
-target_link_libraries(smd_dgx_ida PRIVATE smd_dgx_emu "${IDA_LIB}"
-  $<$<BOOL:${WIN32}>:winmm>)   # AudioOutput (waveOut)
+target_link_libraries(smd_dgx_ida PRIVATE smd_dgx_emu gx_audio "${IDA_LIB}")
 set_target_properties(smd_dgx_ida PROPERTIES
   CXX_STANDARD 20
   CXX_STANDARD_REQUIRED YES
   OUTPUT_NAME "smd_dgx_ida"
-  SUFFIX ".dll"
+  PREFIX ""                       # IDA scans for the bare name, not libsmd_...
+  SUFFIX "${IDA_MODULE_SUFFIX}"
 )
 
 # Views embedding (phase 3).
@@ -67,18 +89,36 @@ set_target_properties(smd_dgx_ida PROPERTIES
 # specified procedure could not be found"). So:
 #   - headers + moc come from the regular Qt install (same 6.8.2), and
 #   - QT_NAMESPACE=QT makes them declare everything in namespace QT, and
-#   - we link the import libs the SDK ships for IDA's own Qt (lib/x64_win_qt).
-# At runtime the plugin uses the Qt DLLs IDA has already loaded — never deploy
-# Qt next to the plugin.
-find_library(IDA_QT_CORE    Qt6Core    HINTS "${IDA_SDK_DIR}/lib/x64_win_qt" NO_DEFAULT_PATH)
-find_library(IDA_QT_GUI     Qt6Gui     HINTS "${IDA_SDK_DIR}/lib/x64_win_qt" NO_DEFAULT_PATH)
-find_library(IDA_QT_WIDGETS Qt6Widgets HINTS "${IDA_SDK_DIR}/lib/x64_win_qt" NO_DEFAULT_PATH)
+#   - we link the import libs the SDK ships for IDA's own Qt (lib/*_qt).
+# At runtime the plugin uses the Qt libraries IDA has already loaded — never
+# deploy Qt next to the plugin.
+#
+# On Linux and macOS there are no import libraries: the loader resolves Qt
+# symbols against what the IDA process has already mapped, so nothing is linked
+# and the views build from headers alone.
+if (WIN32)
+  find_library(IDA_QT_CORE    Qt6Core    HINTS ${IDA_QT_LIB_DIR} NO_DEFAULT_PATH)
+  find_library(IDA_QT_GUI     Qt6Gui     HINTS ${IDA_QT_LIB_DIR} NO_DEFAULT_PATH)
+  find_library(IDA_QT_WIDGETS Qt6Widgets HINTS ${IDA_QT_LIB_DIR} NO_DEFAULT_PATH)
+  set(IDA_QT_READY ${IDA_QT_CORE})
+  if (NOT IDA_QT_GUI OR NOT IDA_QT_WIDGETS)
+    set(IDA_QT_READY OFF)
+  endif()
+else()
+  set(IDA_QT_CORE "")
+  set(IDA_QT_GUI "")
+  set(IDA_QT_WIDGETS "")
+  set(IDA_QT_READY ON)
+endif()
 
-if (Qt6_FOUND AND IDA_QT_CORE AND IDA_QT_GUI AND IDA_QT_WIDGETS)
+if (Qt6_FOUND AND IDA_QT_READY)
   set(GX_QT6_VIEWS "${CMAKE_CURRENT_LIST_DIR}/../frontends/qt6/views")
   target_sources(smd_dgx_ida PRIVATE
     ida_dock.cpp        # IDA side, no Qt
     ida_views.cpp       # Qt side, no IDA headers
+    # Same settings file as the standalone app, so zoom levels and watch lists
+    # follow the user between the two hosts.
+    "${CMAKE_CURRENT_LIST_DIR}/../frontends/qt6/ViewSettings.cpp"
     "${GX_QT6_VIEWS}/EmulatorScreen.cpp"
     "${GX_QT6_VIEWS}/SaveStateView.cpp"
     "${GX_QT6_VIEWS}/ScrollView.cpp"
@@ -110,16 +150,25 @@ if (Qt6_FOUND AND IDA_QT_CORE AND IDA_QT_GUI AND IDA_QT_WIDGETS)
   if (MSVC)
     target_compile_options(smd_dgx_ida PRIVATE /Zc:__cplusplus /permissive-)
   endif()
-  target_link_libraries(smd_dgx_ida PRIVATE
-    "${IDA_QT_WIDGETS}" "${IDA_QT_GUI}" "${IDA_QT_CORE}")
+  if (WIN32)
+    target_link_libraries(smd_dgx_ida PRIVATE
+      "${IDA_QT_WIDGETS}" "${IDA_QT_GUI}" "${IDA_QT_CORE}")
+  else()
+    # Resolve Qt against whatever IDA has already loaded, rather than failing
+    # the link over symbols that will exist at load time.
+    if (APPLE)
+      target_link_options(smd_dgx_ida PRIVATE "-Wl,-undefined,dynamic_lookup")
+    endif()
+  endif()
   set_target_properties(smd_dgx_ida PROPERTIES AUTOMOC ON)
 else()
-  message(STATUS "IDA plugin: views disabled (need Qt6 + ${IDA_SDK_DIR}/lib/x64_win_qt)")
+  message(STATUS "IDA plugin: views disabled (need Qt6, and on Windows ${IDA_QT_LIB_DIR})")
 endif()
 
 if (IDA_INSTALL_DIR)
   add_custom_command(TARGET smd_dgx_ida POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "$<TARGET_FILE:smd_dgx_ida>" "${IDA_INSTALL_DIR}/plugins/"
-    COMMENT "Copy plugin to IDA plugins dir")
+    COMMAND "${CMAKE_COMMAND}"
+            -DSRC=$<TARGET_FILE:smd_dgx_ida> -DDST=${IDA_INSTALL_DIR}/plugins
+            -P "${CMAKE_CURRENT_LIST_DIR}/../cmake/install_ida_module.cmake"
+    COMMENT "Install plugin into IDA")
 endif()

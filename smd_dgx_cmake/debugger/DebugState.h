@@ -35,8 +35,10 @@ struct Z80Regs {
 struct VdpState {
     uint8_t  reg[0x20];
     uint16_t status;
-    uint32_t dma_len, dma_src;
-    uint8_t  dma_type;     // 0=VRAM fill, 1=VRAM copy, 2=bus->VRAM/CRAM/VSRAM
+    uint32_t dma_len;      // in words
+    uint32_t dma_src;      // BYTE address (regs 21-23 hold a word address)
+    // As the core assigns it (vdp_ctrl.c), not the order reg 23 suggests:
+    uint8_t  dma_type;     // 0=bus->CRAM/VSRAM, 1=bus->VRAM, 2=VRAM fill, 3=VRAM copy
     uint16_t vdp_addr;     // pending access: address register
     uint8_t  vdp_code;     // pending access: code register (low nibble = target)
     const uint8_t* vram;   // 0x10000 bytes – points into gpgx globals

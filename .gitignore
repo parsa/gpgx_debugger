@@ -20,3 +20,7 @@ builds/
 *.o
 *.a
 *.aps
+# Emulator run artifacts: cartridge save RAM and save states are produced
+# next to whatever the working directory happened to be.
+*.srm
+*.gpz

@@ -1,5 +1,16 @@
 cmake_minimum_required (VERSION 3.20)
 
+# Pick up vcpkg when the caller has not chosen a toolchain and VCPKG_ROOT is
+# set. This cannot live in the presets: a preset cache variable is expanded
+# unconditionally, so "$env{VCPKG_ROOT}/scripts/..." collapses to an invalid
+# path — and a hard configure error — on a machine that has no vcpkg. Here it
+# is simply skipped, and dependencies resolve from the system instead, which is
+# how a Linux build normally wants to work.
+if (NOT DEFINED CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{VCPKG_ROOT})
+  set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      CACHE STRING "Vcpkg toolchain file")
+endif()
+
 # Enable Hot Reload for MSVC compilers if supported.
 if (POLICY CMP0141)
   cmake_policy(SET CMP0141 NEW)
@@ -74,20 +85,47 @@ target_include_directories(smd_dgx_emu PUBLIC "${CMAKE_CURRENT_LIST_DIR}")
 target_link_libraries(smd_dgx_emu PUBLIC gx_core frontend_common)
 set_target_properties(smd_dgx_emu PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
 
-# ---- SDL2 + ImGui frontend ----
-find_package(OpenGL REQUIRED)
 find_package(SDL2 CONFIG REQUIRED)
-find_package(imgui CONFIG REQUIRED)
 
-set(GX_PLATFORM_SDL "${CMAKE_CURRENT_LIST_DIR}/frontends/sdl")
-add_library(gx_platform_lib STATIC "${GX_PLATFORM_SDL}/sdl.c")
-target_include_directories(gx_platform_lib PUBLIC "${GX_PLATFORM_SDL}" "${GX_FRONTEND_CORE}")
-target_link_libraries(gx_platform_lib PRIVATE gx_core frontend_common)
+# ---- Audio device ----
+#
+# Its own target so the backend's dependency travels with it. Every host used
+# to have to know that audio means winmm, which is precisely how the audio
+# device ended up being the one thing keeping the hosts on Windows.
+add_library(gx_audio STATIC "${CMAKE_CURRENT_LIST_DIR}/platform/AudioOutput.cpp")
+target_include_directories(gx_audio PUBLIC "${CMAKE_CURRENT_LIST_DIR}/platform")
+if (WIN32)
+  target_link_libraries(gx_audio PRIVATE winmm)          # waveOut
+else()
+  target_link_libraries(gx_audio PRIVATE SDL2::SDL2)
+endif()
+set_target_properties(gx_audio PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES
+                                          POSITION_INDEPENDENT_CODE ON)
 
-add_executable(smd_dgx_cmake)
-target_sources(smd_dgx_cmake PRIVATE "frontends/sdl/osd.h" "frontends/sdl/main_sdl2.cpp")
-target_include_directories(smd_dgx_cmake PRIVATE "frontends/sdl" "frontends/core")
-target_link_libraries(smd_dgx_cmake PRIVATE gx_core gx_platform_lib frontend_common smd_dgx_emu SDL2::SDL2 OpenGL::GL imgui::imgui)
+# ---- SDL2 + ImGui frontend (optional) ----
+#
+# Optional because imgui ships no CMake config package on mainstream Linux
+# distributions, and a hard find_package(imgui CONFIG REQUIRED) here aborted
+# the configure before the Qt6 debugger — the target a Linux user actually
+# wants — was ever reached.
+option(SMD_DGX_BUILD_SDL_FRONTEND "Build the SDL2 + ImGui frontend" ON)
+find_package(OpenGL QUIET)
+find_package(imgui CONFIG QUIET)
+
+if (SMD_DGX_BUILD_SDL_FRONTEND AND OpenGL_FOUND AND imgui_FOUND)
+  set(GX_PLATFORM_SDL "${CMAKE_CURRENT_LIST_DIR}/frontends/sdl")
+  add_library(gx_platform_lib STATIC "${GX_PLATFORM_SDL}/sdl.c")
+  target_include_directories(gx_platform_lib PUBLIC "${GX_PLATFORM_SDL}" "${GX_FRONTEND_CORE}")
+  target_link_libraries(gx_platform_lib PRIVATE gx_core frontend_common)
+
+  add_executable(smd_dgx_cmake)
+  target_sources(smd_dgx_cmake PRIVATE "frontends/sdl/osd.h" "frontends/sdl/main_sdl2.cpp")
+  target_include_directories(smd_dgx_cmake PRIVATE "frontends/sdl" "frontends/core")
+  target_link_libraries(smd_dgx_cmake PRIVATE gx_core gx_platform_lib frontend_common smd_dgx_emu SDL2::SDL2 OpenGL::GL imgui::imgui)
+  set_target_properties(smd_dgx_cmake PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
+elseif (SMD_DGX_BUILD_SDL_FRONTEND)
+  message(STATUS "SDL frontend: skipped (needs OpenGL and an imgui CMake package)")
+endif()
 
 # ---- Qt6 frontend (optional) ----
 find_package(Qt6 COMPONENTS Widgets Gui Core QUIET)
@@ -105,7 +143,8 @@ if (Qt6_FOUND)
     # frontend
     "${GX_PLATFORM_QT6}/MainWindow.h"
     "${GX_PLATFORM_QT6}/MainWindow.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/platform/AudioOutput.cpp"
+    "${GX_PLATFORM_QT6}/ViewSettings.h"
+    "${GX_PLATFORM_QT6}/ViewSettings.cpp"
     # views (parity set with the Gens debug windows)
     "${GX_PLATFORM_QT6}/views/EmulatorScreen.h"
     "${GX_PLATFORM_QT6}/views/EmulatorScreen.cpp"
@@ -139,9 +178,8 @@ if (Qt6_FOUND)
   )
 
   target_link_libraries(smd_dgx_qt6 PRIVATE
-    gx_core gx_platform_qt6 frontend_common smd_dgx_emu
+    gx_core gx_platform_qt6 frontend_common smd_dgx_emu gx_audio
     Qt6::Widgets Qt6::Gui Qt6::Core
-    $<$<BOOL:${WIN32}>:winmm>
   )
 
   set_target_properties(smd_dgx_qt6 PROPERTIES
@@ -160,8 +198,13 @@ if (Qt6_FOUND)
   endif()
 endif()
 
-set_target_properties(smd_dgx_cmake PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
-
 # ---- IDA 9.2+ modules (optional, gated on IDA_SDK_DIR) ----
 add_subdirectory(ida_plugin)   # debugger plugin; also locates IDA_LIB
 add_subdirectory(ida_loader)   # ROM loader (uses IDA_LIB found above)
+
+# ---- Tests ----
+option(SMD_DGX_BUILD_TESTS "Build the test suite" ON)
+if (SMD_DGX_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()

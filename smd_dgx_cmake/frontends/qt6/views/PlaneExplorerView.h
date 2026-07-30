@@ -62,6 +62,7 @@ class PlaneExplorerView : public QWidget {
     Q_OBJECT
 public:
     explicit PlaneExplorerView(QWidget* parent = nullptr);
+    ~PlaneExplorerView() override;          // persists plane / zoom / transparency
     void setBackend(IDebugBackend* b);
     void refresh();
 private slots:

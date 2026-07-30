@@ -15,7 +15,7 @@ add_library(smd_dgx_ldr SHARED
 )
 target_include_directories(smd_dgx_ldr PRIVATE "${IDA_SDK_DIR}/include")
 target_compile_definitions(smd_dgx_ldr PRIVATE
-  __NT__ __X64__ __EA64__
+  ${IDA_PLATFORM_DEF} __X64__ __EA64__
   NO_OBSOLETE_FUNCS
 )
 target_link_libraries(smd_dgx_ldr PRIVATE "${IDA_LIB}")
@@ -23,13 +23,15 @@ set_target_properties(smd_dgx_ldr PROPERTIES
   CXX_STANDARD 20
   CXX_STANDARD_REQUIRED YES
   OUTPUT_NAME "smd_dgx_ldr"
-  SUFFIX ".dll"
+  PREFIX ""
+  SUFFIX "${IDA_MODULE_SUFFIX}"
 )
 
 if (IDA_INSTALL_DIR)
   add_custom_command(TARGET smd_dgx_ldr POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "$<TARGET_FILE:smd_dgx_ldr>" "${IDA_INSTALL_DIR}/loaders/"
+    COMMAND "${CMAKE_COMMAND}"
+            -DSRC=$<TARGET_FILE:smd_dgx_ldr> -DDST=${IDA_INSTALL_DIR}/loaders
+            -P "${CMAKE_CURRENT_LIST_DIR}/../cmake/install_ida_module.cmake"
     COMMENT "Copy loader to IDA loaders dir")
 endif()
 
@@ -44,7 +46,7 @@ add_library(smd_dgx_z80_ldr SHARED
 )
 target_include_directories(smd_dgx_z80_ldr PRIVATE "${IDA_SDK_DIR}/include")
 target_compile_definitions(smd_dgx_z80_ldr PRIVATE
-  __NT__ __X64__ __EA64__
+  ${IDA_PLATFORM_DEF} __X64__ __EA64__
   NO_OBSOLETE_FUNCS
 )
 target_link_libraries(smd_dgx_z80_ldr PRIVATE "${IDA_LIB}")
@@ -52,12 +54,14 @@ set_target_properties(smd_dgx_z80_ldr PROPERTIES
   CXX_STANDARD 20
   CXX_STANDARD_REQUIRED YES
   OUTPUT_NAME "smd_dgx_z80_ldr"
-  SUFFIX ".dll"
+  PREFIX ""
+  SUFFIX "${IDA_MODULE_SUFFIX}"
 )
 
 if (IDA_INSTALL_DIR)
   add_custom_command(TARGET smd_dgx_z80_ldr POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "$<TARGET_FILE:smd_dgx_z80_ldr>" "${IDA_INSTALL_DIR}/loaders/"
+    COMMAND "${CMAKE_COMMAND}"
+            -DSRC=$<TARGET_FILE:smd_dgx_z80_ldr> -DDST=${IDA_INSTALL_DIR}/loaders
+            -P "${CMAKE_CURRENT_LIST_DIR}/../cmake/install_ida_module.cmake"
     COMMENT "Copy Z80 loader to IDA loaders dir")
 endif()

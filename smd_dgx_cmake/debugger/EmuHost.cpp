@@ -65,7 +65,10 @@ void EmuHost::stop()
 {
     if (!thread_.joinable()) { running_.store(false); return; }
     stopFlag_.store(true);
-    backend_.resume();            // unblock a pause spin so the thread can exit
+    // Not just resume(): the instruction right after a resume can hit the same
+    // breakpoint and park the thread again before it ever re-checks stopFlag_,
+    // and then this join waits forever.
+    backend_.abortRunControl();
     thread_.join();
     running_.store(false);
 
@@ -211,17 +214,27 @@ void EmuHost::copyViewport(std::vector<uint8_t>& out, int& w, int& h) const
     }
 }
 
-void EmuHost::addEventSink(EventSink s)
+int EmuHost::addEventSink(EventSink s)
 {
-    if (!s) return;
+    if (!s) return -1;
     std::lock_guard<std::mutex> lk(sinkMx_);
-    eventSinks_.push_back(std::move(s));
+    const int id = nextSinkId_++;
+    eventSinks_.push_back({ id, std::move(s) });
+    return id;
+}
+
+void EmuHost::removeEventSink(int id)
+{
+    if (id < 0) return;
+    std::lock_guard<std::mutex> lk(sinkMx_);
+    for (size_t i = 0; i < eventSinks_.size(); ++i)
+        if (eventSinks_[i].id == id) { eventSinks_.erase(eventSinks_.begin() + i); return; }
 }
 
 void EmuHost::emitEvent(const DebugEvent& ev)
 {
     if (transport_) transport_->sendEvent(ev);
-    std::vector<EventSink> sinks;
+    std::vector<Sink> sinks;
     { std::lock_guard<std::mutex> lk(sinkMx_); sinks = eventSinks_; }
-    for (const auto& s : sinks) s(ev);      // copied: a sink may outlive the lock
+    for (const auto& s : sinks) s.fn(ev);   // copied: a sink may outlive the lock
 }

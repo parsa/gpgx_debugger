@@ -7,23 +7,7 @@
 #include <memory>
 #include <vector>
 
-#ifdef _WIN32
-#  define WIN32_LEAN_AND_MEAN
-#  include <winsock2.h>
-#  include <ws2tcpip.h>
-#  pragma comment(lib, "ws2_32.lib")
-   using socket_t = SOCKET;
-#  define CLOSESOCK closesocket
-#  define BAD_SOCK  INVALID_SOCKET
-#else
-#  include <sys/socket.h>
-#  include <netinet/in.h>
-#  include <arpa/inet.h>
-#  include <unistd.h>
-   using socket_t = int;
-#  define CLOSESOCK ::close
-#  define BAD_SOCK  (-1)
-#endif
+#include "SocketCompat.h"
 
 namespace {
 
@@ -85,10 +69,7 @@ bool BridgeServer::start(unsigned short port)
     stop();
     stopFlag_.store(false);
 
-#ifdef _WIN32
-    WSADATA wsa;
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return false;
-#endif
+    if (!sockcompat::netInit()) return false;
 
     socket_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd == BAD_SOCK) return false;
@@ -112,13 +93,18 @@ bool BridgeServer::start(unsigned short port)
     listenFd_ = static_cast<long long>(fd);
     port_     = port;
     running_.store(true);
-    host_->addEventSink([this](const DebugEvent& ev) { onEmuEvent(&ev); });
+    sinkId_ = host_->addEventSink([this](const DebugEvent& ev) { onEmuEvent(&ev); });
     thread_   = std::thread(&BridgeServer::serve, this);
     return true;
 }
 
 void BridgeServer::stop()
 {
+    // First, before anything else: the host outlives this object in every
+    // caller, and its own shutdown emits a final Stopped event. A sink still
+    // pointing here would be called on a half-destroyed BridgeServer.
+    if (host_ && sinkId_ >= 0) { host_->removeEventSink(sinkId_); sinkId_ = -1; }
+
     if (!thread_.joinable()) { running_.store(false); return; }
     stopFlag_.store(true);
     if (listenFd_ >= 0) {
@@ -130,16 +116,15 @@ void BridgeServer::stop()
     {
         std::lock_guard<std::mutex> lk(clientsMx_);
         for (auto& c : clients_)
-            if (c->fd >= 0) CLOSESOCK(static_cast<socket_t>(c->fd));
+            if (c->fd >= 0) { CLOSESOCK(static_cast<socket_t>(c->fd)); c->fd = -1; }
     }
     thread_.join();
     for (auto& t : clientThreads_) if (t.joinable()) t.join();
     clientThreads_.clear();
     { std::lock_guard<std::mutex> lk(clientsMx_); clients_.clear(); }
     running_.store(false);
-#ifdef _WIN32
-    WSACleanup();
-#endif
+    // No WSACleanup: it is refcounted per process, and this object is not the
+    // only socket user in an IDA process. See SocketCompat.h.
 }
 
 void BridgeServer::serve()
@@ -147,6 +132,8 @@ void BridgeServer::serve()
     while (!stopFlag_.load()) {
         socket_t fd = ::accept(static_cast<socket_t>(listenFd_), nullptr, nullptr);
         if (fd == BAD_SOCK) break;               // listener closed by stop()
+
+        sockcompat::suppressSigpipe(fd);
 
         auto c = std::make_shared<Client>();
         c->fd = static_cast<long long>(fd);
@@ -177,19 +164,21 @@ void BridgeServer::serveClient(std::shared_ptr<Client> c)
 
             std::string reply = handle(line, *c);
             reply += '\n';
-            size_t sent = 0;
-            while (sent < reply.size()) {
-                const int w = ::send(fd, reply.data() + sent, (int)(reply.size() - sent), 0);
-                if (w <= 0) { sent = reply.size(); break; }
-                sent += w;
-            }
+            if (!sockcompat::sendAll(fd, reply.data(), reply.size()))
+                goto gone;              // peer vanished mid-reply
         }
     }
+gone:
 
-    CLOSESOCK(fd);
-    std::lock_guard<std::mutex> lk(clientsMx_);
-    for (size_t i = 0; i < clients_.size(); ++i)
-        if (clients_[i] == c) { clients_.erase(clients_.begin() + i); break; }
+    // Claim the descriptor before closing it. stop() closes client sockets to
+    // wake their threads, so without this handshake the same fd is closed
+    // twice — and a descriptor number reused by then belongs to someone else.
+    {
+        std::lock_guard<std::mutex> lk(clientsMx_);
+        if (c->fd >= 0) { c->fd = -1; CLOSESOCK(fd); }
+        for (size_t i = 0; i < clients_.size(); ++i)
+            if (clients_[i] == c) { clients_.erase(clients_.begin() + i); break; }
+    }
 }
 
 // Runs on the EMULATION thread. Queue and return — never touch the backend

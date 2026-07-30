@@ -10,7 +10,7 @@ class EmulatorScreen;
 class EmuHost;
 class AudioOutput;
 class BridgeServer;
-class GpgxBackend;
+class IDebugBackend;
 class VdpRamView;
 class VdpRegView;
 class ScrollView;
@@ -50,9 +50,14 @@ private:
     void stopEmulator();
     void buildDocks();
 
-    GpgxBackend*      backend_   = nullptr;
+    // The host owns the backend, and there must be exactly one: the CPU hook is
+    // a single global that the most recently constructed GpgxBackend claims, so
+    // a second instance leaves whichever one the UI holds receiving no hooks at
+    // all — reads still work (core state is global), but pause, stepping and
+    // breakpoints are silently inert.
+    EmuHost*          emuHost_   = nullptr;
+    IDebugBackend*    backend_   = nullptr;   // == emuHost_->backend()
     EmulatorScreen*   screen_    = nullptr;
-    EmuHost*          emuHost_ = nullptr;
     AudioOutput*      audio_   = nullptr;
     BridgeServer*     bridge_  = nullptr;
     QTimer            refreshTimer_;

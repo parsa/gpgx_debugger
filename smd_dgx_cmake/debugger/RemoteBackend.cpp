@@ -4,23 +4,7 @@
 #include <cstring>
 #include <sstream>
 
-#ifdef _WIN32
-#  define WIN32_LEAN_AND_MEAN
-#  include <winsock2.h>
-#  include <ws2tcpip.h>
-#  pragma comment(lib, "ws2_32.lib")
-   using socket_t = SOCKET;
-#  define CLOSESOCK closesocket
-#  define BAD_SOCK  INVALID_SOCKET
-#else
-#  include <sys/socket.h>
-#  include <netinet/in.h>
-#  include <arpa/inet.h>
-#  include <unistd.h>
-   using socket_t = int;
-#  define CLOSESOCK ::close
-#  define BAD_SOCK  (-1)
-#endif
+#include "SocketCompat.h"
 
 namespace {
 
@@ -70,12 +54,11 @@ RemoteBackend::~RemoteBackend() { disconnect(); }
 bool RemoteBackend::connect(const char* host, unsigned short port)
 {
     disconnect();
-#ifdef _WIN32
-    WSADATA wsa;
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return false;
-#endif
+    if (!sockcompat::netInit()) return false;
+
     socket_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd == BAD_SOCK) return false;
+    sockcompat::suppressSigpipe(fd);
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -109,12 +92,7 @@ std::string RemoteBackend::call(const std::string& line)
 
     std::string req = line;
     req += '\n';
-    size_t sent = 0;
-    while (sent < req.size()) {
-        const int w = ::send(fd, req.data() + sent, int(req.size() - sent), 0);
-        if (w <= 0) return {};
-        sent += w;
-    }
+    if (!sockcompat::sendAll(fd, req.data(), req.size())) return {};
 
     char chunk[8192];
     size_t nl;

@@ -339,7 +339,7 @@ drc_t read_registers(int clsmask, regval_t* values)
 
         VdpState v = be->getVdpState();
         values[R_VDP_DMA_LEN].ival = v.dma_len;
-        values[R_VDP_DMA_SRC].ival = (v.dma_src << 1) & 0xFFFFFF;
+        values[R_VDP_DMA_SRC].ival = v.dma_src;      // already a byte address
         // Where the next data-port write lands, as an address IDA can follow
         // into the VDP pseudo-segments.
         uint32_t dst = BREAKPOINTS_BASE;
@@ -465,10 +465,8 @@ drc_t update_bpts(int* nbpts, update_bpt_info_t* bpts, int nadd, int ndel)
 // ---------------------------------------------------------------------------
 void stop_audio()
 {
-#ifdef _WIN32
     delete g_audio;
     g_audio = nullptr;
-#endif
 }
 
 drc_t start_process(const char* path, const char* input_path)
@@ -484,12 +482,12 @@ drc_t start_process(const char* path, const char* input_path)
 #ifdef SMD_DGX_IDA_VIEWS
     g_host->setFrameSink(smd_dgx_push_frame);   // no-op unless the Screen dock is open
 #endif
-#ifdef _WIN32
     g_audio = new AudioOutput();
+    if (!g_audio->isOpen())
+        msg(PLUGIN_NAME ": no audio device — the emulator will run silently\n");
     g_host->setAudioSink([](const int16_t* stereo, int frames) {
         if (g_audio) g_audio->write(stereo, frames);
     });
-#endif
 
     const char* rom = (input_path && input_path[0]) ? input_path : path;
     if (!g_host->start(rom ? rom : "")) {

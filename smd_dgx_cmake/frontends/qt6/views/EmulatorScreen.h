@@ -21,6 +21,7 @@ class EmulatorScreen : public QWidget {
     Q_OBJECT
 public:
     explicit EmulatorScreen(QWidget* parent = nullptr);
+    ~EmulatorScreen() override;             // persists the presentation options
     void setBackend(IDebugBackend* b) { backend_ = b; }
     void refresh() {}                       // frames arrive via pushFrame()
 

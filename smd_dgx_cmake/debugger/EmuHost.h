@@ -48,7 +48,13 @@ public:
     // Several consumers now: the IDA plugin turns events into debug_event_t,
     // the bridge queues them for attached clients. Sinks run on the EMULATION
     // thread — keep them short and never call back into run control.
-    void addEventSink(EventSink s);
+    //
+    // Returns a token for removeEventSink. A sink that does not outlive this
+    // host MUST remove itself: stop() emits a final Stopped event, so a sink
+    // belonging to an already-deleted object is called exactly when it is most
+    // certainly gone.
+    int  addEventSink(EventSink s);
+    void removeEventSink(int id);
 
     // Direct access for in-proc hosts (synchronous reads/writes; call while
     // paused). Never null after construction.
@@ -90,8 +96,10 @@ private:
     IDebugTransport*  transport_ = nullptr;
     FrameSink         frameSink_;
     AudioSink         audioSink_;
-    std::mutex             sinkMx_;
-    std::vector<EventSink> eventSinks_;
+    struct Sink { int id; EventSink fn; };
+    std::mutex        sinkMx_;
+    std::vector<Sink> eventSinks_;
+    int               nextSinkId_ = 1;
 
     std::thread       thread_;
     std::atomic<bool> stopFlag_ { false };
