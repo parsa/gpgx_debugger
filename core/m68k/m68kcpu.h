@@ -141,6 +141,17 @@
 /* Simulate address lines of 68k family */
 #define ADDRESS_68K(A) ((A)&CPU_ADDRESS_MASK)
 
+/* Data breakpoints. Without these a debugger can only break on execution,
+ * which leaves "what wrote this address?" — the question most memory
+ * investigations start from — unanswerable. The hook sites below are where
+ * upstream left commented-out check_breakpoint() calls. */
+#ifdef HOOK_CPU
+#define M68K_HOOK_MEM(type, size, addr, val) \
+  do { if (cpu_hook) cpu_hook((type), (size), ADDRESS_68K(addr), (val)); } while (0)
+#else
+#define M68K_HOOK_MEM(type, size, addr, val) do {} while (0)
+#endif
+
 
 /* Shift & Rotate Macros. */
 #define LSL(A, C) ((A) << (C))
@@ -873,11 +884,7 @@ INLINE uint m68ki_read_8(uint address)
   if (temp->read8) val = (*temp->read8)(ADDRESS_68K(address));
   else val = READ_BYTE(temp->base, (address) & 0xffff);
 
-#ifdef HOOK_CPU
-  if (UNLIKELY(cpu_hook))
-    cpu_hook(HOOK_M68K_R, 1, address, val);
-#endif
-  // check_breakpoint(BPT_M68K_R, 1, address, val);
+  M68K_HOOK_MEM(HOOK_M68K_R, 1, address, val);
 
   return val;
 }
@@ -894,11 +901,7 @@ INLINE uint m68ki_read_16(uint address)
   if (temp->read16) val = (*temp->read16)(ADDRESS_68K(address));
   else val = *(uint16 *)(temp->base + ((address) & 0xfffe));
 
-#ifdef HOOK_CPU
-  if (UNLIKELY(cpu_hook))
-    cpu_hook(HOOK_M68K_R, 2, address, val);
-#endif
-  // check_breakpoint(BPT_M68K_R, 2, address, val);
+  M68K_HOOK_MEM(HOOK_M68K_R, 2, address, val);
 
   return val;
 }
@@ -919,11 +922,7 @@ INLINE uint m68ki_read_32(uint address)
   if (temp->read16) val |= (*temp->read16)(ADDRESS_68K(address+2));
   else val |= *(uint16 *)(temp->base + ((address+2) & 0xfffe));
 
-#ifdef HOOK_CPU
-  if (UNLIKELY(cpu_hook))
-    cpu_hook(HOOK_M68K_R, 4, address, val);
-#endif
-  // check_breakpoint(BPT_M68K_R, 4, address, val);
+  M68K_HOOK_MEM(HOOK_M68K_R, 4, address, val);
 
   return val;
 }
@@ -934,7 +933,7 @@ INLINE void m68ki_write_8(uint address, uint value)
 
   m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_DATA); /* auto-disable (see m68kcpu.h) */
 
-  // check_breakpoint(BPT_M68K_W, 1, address, value);
+  M68K_HOOK_MEM(HOOK_M68K_W, 1, address, value);
 
   temp = &m68ki_cpu.memory_map[((address)>>16)&0xff];
   if (temp->write8) (*temp->write8)(ADDRESS_68K(address),value);
@@ -948,11 +947,7 @@ INLINE void m68ki_write_16(uint address, uint value)
   m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_DATA); /* auto-disable (see m68kcpu.h) */
   m68ki_check_address_error(address, MODE_WRITE, FLAG_S | FUNCTION_CODE_USER_DATA); /* auto-disable (see m68kcpu.h) */
 
-#ifdef HOOK_CPU
-  if (UNLIKELY(cpu_hook))
-    cpu_hook(HOOK_M68K_W, 2, address, value);
-#endif
-  // check_breakpoint(BPT_M68K_W, 2, address, value);
+  M68K_HOOK_MEM(HOOK_M68K_W, 2, address, value);
 
   temp = &m68ki_cpu.memory_map[((address)>>16)&0xff];
   if (temp->write16) (*temp->write16)(ADDRESS_68K(address),value);
@@ -966,7 +961,7 @@ INLINE void m68ki_write_32(uint address, uint value)
   m68ki_set_fc(FLAG_S | FUNCTION_CODE_USER_DATA); /* auto-disable (see m68kcpu.h) */
   m68ki_check_address_error(address, MODE_WRITE, FLAG_S | FUNCTION_CODE_USER_DATA); /* auto-disable (see m68kcpu.h) */
 
-  // check_breakpoint(BPT_M68K_W, 4, address, value);
+  M68K_HOOK_MEM(HOOK_M68K_W, 4, address, value);
 
   temp = &m68ki_cpu.memory_map[((address)>>16)&0xff];
   if (temp->write16) (*temp->write16)(ADDRESS_68K(address),value>>16);
