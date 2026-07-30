@@ -789,8 +789,11 @@ struct smd_dgx_z80_plugmod_t : public plugmod_t, public event_listener_t {
             dbg = nullptr;
     }
 
+    // Same guard as the 68000 half: ::dbg is process-wide, and this table has
+    // 26 registers where the other has 54.
     ssize_t idaapi on_event(ssize_t code, va_list va) override
     {
+        if (dbg != &z80_debugger) return DRC_NONE;
         return smd_dgx_z80_event((int)code, va);
     }
 
@@ -827,8 +830,19 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
         // event listeners hooked via plugmod_t are auto-unhooked on delete
     }
 
+    // Only answer for the debugger IDA currently has selected.
+    //
+    // `dbg` is one slot for the whole process, and every debugger plugin
+    // assigns to it — including this DLL's other half. IDA sizes its register
+    // buffer from ::dbg (idd.hpp), and the two tables here are 54 registers and
+    // 26, so answering an event meant for the other one writes past the end of
+    // a buffer someone else allocated. This is not multi-database exotica: IDA
+    // loads several debugger plugins for one database as a matter of course.
+    bool is_ours() const { return dbg == &debugger; }
+
     ssize_t idaapi on_event(ssize_t code, va_list va) override
     {
+        if (!is_ours()) return DRC_NONE;
         return debugger_callback(nullptr, (int)code, va);
     }
 

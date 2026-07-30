@@ -75,8 +75,17 @@ bool BridgeServer::start(unsigned short port)
     socket_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd == BAD_SOCK) return false;
 
+    // Exclusivity, not reuse. On Windows SO_REUSEADDR lets a SECOND process
+    // bind a port that is already listening: both emulators would report
+    // "control socket on 27042", and whichever the kernel picked would get the
+    // clients while the other sat there looking healthy and unreachable. On
+    // POSIX SO_REUSEADDR only skips TIME_WAIT, which is what we want there.
     int yes = 1;
+#ifdef _WIN32
+    ::setsockopt(fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&yes, sizeof yes);
+#else
     ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof yes);
+#endif
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
