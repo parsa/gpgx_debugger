@@ -195,6 +195,11 @@ void stop_polling()
 // waiting for a start that never comes.
 drc_t attach_process(bool as_attach)
 {
+    // Before the delete, always: the poll thread dereferences g_remote on every
+    // tick. Detaching stops it, but attaching twice without detaching in
+    // between does not, and then this frees the object out from under it.
+    stop_polling();
+
     delete g_remote;
     g_remote = new RemoteBackend();
     g_zbpIds.clear();
