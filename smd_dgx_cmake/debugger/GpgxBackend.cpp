@@ -12,6 +12,7 @@ extern "C" {
 #include <sound/sound.h>      // fm_debug_regs
 #include <sound/psg.h>        // psg_debug_regs
 #include <state.h>            // state_save/state_load, STATE_SIZE
+#include <loadrom.h>          // rominfo: name, serial, calculated checksum
 #include <debug/cpuhook.h>
 }
 
@@ -33,7 +34,33 @@ static void cpuHookShim(hook_type_t type, int width, unsigned int addr, unsigned
 }
 
 GpgxBackend::GpgxBackend()  { g_gpgxBackend = this; set_cpu_hook(cpuHookShim); }
-GpgxBackend::~GpgxBackend() { set_cpu_hook(nullptr); g_gpgxBackend = nullptr; }
+
+GpgxBackend::~GpgxBackend()
+{
+    // Only tear down the hook if it is still ours. A second backend claims the
+    // global on construction, and an unconditional clear here would silently
+    // kill breakpoints and stepping for whoever is actually running.
+    if (g_gpgxBackend == this) {
+        set_cpu_hook(nullptr);
+        g_gpgxBackend = nullptr;
+    }
+}
+
+SessionInfo GpgxBackend::sessionInfo() const
+{
+    SessionInfo s;
+    if (!running_.load()) return s;
+    s.crc = rominfo.realchecksum;
+    // The header fields are fixed-width and space-padded, not terminated.
+    auto trimmed = [](const char* p, size_t n) {
+        std::string v(p, ::strnlen(p, n));
+        while (!v.empty() && (unsigned char)v.back() <= 0x20) v.pop_back();
+        return v;
+    };
+    s.serial = trimmed(rominfo.product, sizeof rominfo.product);
+    s.name   = trimmed(rominfo.domestic, sizeof rominfo.domestic);
+    return s;
+}
 
 // ---------------------------------------------------------------------------
 // CPU state

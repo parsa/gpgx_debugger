@@ -18,8 +18,23 @@ CODE = {
     0x2DB4: ("cram_upload", "FFD7D4 shadow -> CRAM, every frame"),
     0x2DD4: ("vram_upload", "a0=src, d0=words, d1=VDP dest"),
     0x2DF0: ("vram_upload_cmd", "d1 = full VDP address-and-command long"),
+    0x4016: ("vram_upload_container", "a0=container ((a0)=tile offset), "
+                                      "d0=tiles, d1=VDP dest"),
+    0x4022: ("nametable_fill", "a0=container, d0=VDP dest, d2=map index, "
+                               "d4=base attribute, d6=cols-1, d7=rows-1"),
+    0x405C: ("nametable_fill_wide", "same, 0x100 row stride"),
+    0x4304: ("vdp_set_registers", "19 registers from a0"),
+    0x4342: ("vdp_queue_transfer", "12-byte ring at FFD862"),
+    0x4B4F4: ("scene_hero_select", None),
     0x4D2C4: ("cycle_menu_highlight", "16-step table at 0x4D87E -> colour 15 of "
                                       "palette lines 0-2. Not a fade."),
+    0x4D3CC: ("textobj_clear", "10 slots x 0x12 bytes at FF1F94"),
+    0x4D3FE: ("textobj_add", None),
+    0x4D4C6: ("draw_box_9patch", "tiles 0x5CE.., via cell_write_box"),
+    0x4D51E: ("cell_write_box", "d0=col d1=row d2=piece; tile = 0x5CE + d2"),
+    0x4D5C8: ("text_draw", "a0 = {u16 col, u16 row, chars}, d3 = palette bits"),
+    0x4D5D4: ("text_draw_indented", None),
+    0x4D676: ("cell_write_glyph", "tile = 0x573 + (c - 0x21), space = 0"),
     0x4D6D6: ("load_portrait", "d0 = portrait index * 4. Unpacks via table 0x4D73E "
                                "to VRAM 0x8D80, draws 8x6 at nametable 0xC082, "
                                "palette line 3."),
@@ -37,8 +52,16 @@ DATA = {
     0x4D96A: ("portrait_palettes", "21 x 32 bytes, index-matched to portrait_table"),
     0x4DD4A: ("dialogue_handler_table", "12 entries"),
     0x4DDAA: ("scene_handler_table", "12 entries"),
-    0x4DE0C: ("niddler_script", None),
-    0x527A0: ("text_hero_select", "CHOOSE A HERO / REN / TULA / IOZ / TALK TO NIDDLER"),
+    0x4DE0C: ("vdp_regs_menu", "19 registers: plane A C000, plane B E000, "
+                               "sprites F400, hscroll F000, 64x32"),
+    0x4DE20: ("text_niddler", None),
+    0x4DC0A: ("hero_accent_palettes", "palette line 1, 32 bytes per hero"),
+    0x4DCCA: ("palette_menu_bg", "palette line 0"),
+    0xE2774: ("font_tiles", "91 raw tiles, '!'..'{', -> VRAM 0xAE60 (tile 0x573)"),
+    0x52D02: ("box_tiles", "raw container -> VRAM 0xB9C0 (tile 0x5CE)"),
+    0x527B5: ("text_menu_options", "NUL-separated: START LEVEL / TALK TO NIDDLER "
+                                   "/ MAP SCREEN / CHOOSE A HERO / REN / TULA / IOZ"),
+    0x52798: ("text_hero_select_title", "{col 12, row 3} CHOOSE YOUR HERO WISELY."),
     0x52804: ("text_portrait_lines", "one string per portrait, indices 15..20"),
     0x5C272: ("vram_desc_main", "{u32 src, u16 words, u16 dest}, neg-long terminated"),
     0xFF0D20: ("palette_target", "64 entries, bus format - what the scene wants"),

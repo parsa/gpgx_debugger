@@ -36,7 +36,15 @@ public:
     explicit BridgeServer(EmuHost* host) : host_(host) {}
     ~BridgeServer() { stop(); }
 
-    bool start(unsigned short port = 27042);
+    // Port 0 (the default) means: honour $SMD_DGX_PORT if it is set, otherwise
+    // take the first free port from kBasePort upwards. Two emulators can then
+    // run at once; port() reports which one this session actually got.
+    //
+    // A fixed port would be simpler, but it makes a second game silently
+    // unreachable, and clients cannot tell whose game they reached.
+    static constexpr unsigned short kBasePort  = 27042;
+    static constexpr unsigned short kPortRange = 16;
+    bool start(unsigned short port = 0);
     void stop();
     bool isRunning() const { return running_.load(); }
     unsigned short port() const { return port_; }
@@ -60,6 +68,7 @@ private:
         std::map<int, std::vector<uint8_t>> snaps;
     };
 
+    bool bindOne(unsigned short port, long long& fdOut);
     void serve();                                   // accept loop
     void serveClient(std::shared_ptr<Client> c);    // one connection
     std::string handle(const std::string& line, Client& c);

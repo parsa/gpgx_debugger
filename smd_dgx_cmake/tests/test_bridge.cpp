@@ -384,6 +384,81 @@ TEST(bridge_diff_reports_what_changed_since_the_snapshot)
     CHECK(raw.cmd("diff 3 8").rfind("err", 0) == 0);
 }
 
+// ---------------------------------------------------------------------------
+// Two emulators at once.
+//
+// A fixed port made a second game silently unreachable, and left every client
+// unable to say whose game it had reached. The server now takes the first free
+// port in its range and says who it is; the client scans and picks.
+// ---------------------------------------------------------------------------
+TEST(bridge_two_sessions_get_different_ports_and_are_told_apart)
+{
+    // Two *servers*, one emulator. Two emulators cannot be tested in one
+    // process at all: the gpgx core is global C state and GpgxBackend claims a
+    // single global CPU hook, so a second instance silently disables the first.
+    // Two games therefore means two processes — which is exactly the case this
+    // port allocation exists to serve.
+    t::Emu a;
+    REQUIRE(a.start());
+    REQUIRE(a.pauseAndWait());
+
+    BridgeServer sa(a.host()), sb(a.host());
+    REQUIRE(sa.start());                       // 0 = pick a free one
+    REQUIRE(sb.start());
+    CHECK(sa.port() != 0);
+    CHECK(sb.port() != 0);
+    CHECK(sa.port() != sb.port());             // the whole point
+
+    // Both are discoverable, and each reports the port it actually holds.
+    const auto found = RemoteBackend::discover();
+    const bool sawA = std::any_of(found.begin(), found.end(),
+        [&](const SessionInfo& s) { return s.port == sa.port(); });
+    const bool sawB = std::any_of(found.begin(), found.end(),
+        [&](const SessionInfo& s) { return s.port == sb.port(); });
+    CHECK(sawA);
+    CHECK(sawB);
+
+    // Connecting to a named port reaches that one, and says so.
+    RemoteBackend rb;
+    REQUIRE(rb.connect("127.0.0.1", sb.port()));
+    CHECK_EQ(rb.session().port, sb.port());
+    CHECK(rb.session().pid != 0);
+}
+
+TEST(bridge_session_identifies_the_game)
+{
+    Wired w(15);
+    REQUIRE(w.ok);
+
+    const SessionInfo& s = w.remote.session();
+    CHECK(s.pid != 0);
+    CHECK_EQ(s.port, portFor(15));
+    // The synthetic ROM has no product code or title, so those may be "-";
+    // the calculated checksum is what actually distinguishes two games.
+    const SessionInfo direct = w.emu.host()->gpgx()->sessionInfo();
+    CHECK_EQ(s.crc, direct.crc);
+}
+
+TEST(bridge_client_stops_claiming_health_after_the_server_goes)
+{
+    // A dead socket that still reports connected turns every later read into
+    // zeros that look like real emulator state.
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+
+    auto* srv = new BridgeServer(e.host());
+    REQUIRE(srv->start(portFor(16)));
+
+    RemoteBackend rb;
+    REQUIRE(rb.connect("127.0.0.1", portFor(16)));
+    CHECK(rb.isConnected());
+
+    delete srv;                                 // server goes away
+    rb.getM68kRegs();                           // first call notices the close
+    CHECK(!rb.isConnected());
+}
+
 TEST(bridge_rejects_absurd_sizes_instead_of_allocating)
 {
     Wired w(9);

@@ -97,6 +97,9 @@ AudioOutput* g_audio = nullptr;
 // Control socket for external agents (the MCP server). Loopback only.
 BridgeServer* g_bridge = nullptr;
 
+// Cleared on every start_process; see region_rw.
+uint32_t g_romSize = 0;
+
 // ---------------------------------------------------------------------------
 // codemap -> auto_make_code on the main thread
 // ---------------------------------------------------------------------------
@@ -216,11 +219,14 @@ ssize_t region_rw(ea_t ea, void* buf, size_t size, bool write)
     IDebugBackend* be = g_host->backend();
     uint8_t* p = (uint8_t*)buf;
 
-    // ROM size from the region table
-    static uint32_t romSize = 0;
-    if (!romSize)
+    // ROM size from the region table. Session state, not a one-shot static:
+    // a second ROM loaded into the same IDA session is a different size, and a
+    // cached one from the previous game makes the new one read as zeros past
+    // the old end — or shadow RAM that lives beyond it.
+    if (!g_romSize)
         for (const auto& r : be->getMemRegions())
-            if (r.id == 0) romSize = r.size;
+            if (r.id == 0) g_romSize = r.size;
+    const uint32_t romSize = g_romSize;
 
     for (size_t i = 0; i < size; ++i) {
         uint32_t a = (uint32_t)(ea + i);
@@ -471,8 +477,14 @@ void stop_audio()
 
 drc_t start_process(const char* path, const char* input_path)
 {
+    // The bridge first: its handlers hold this EmuHost*, and its event sink is
+    // registered on it. Deleting the host underneath a live BridgeServer left
+    // both dangling for as long as a client stayed connected.
+    delete g_bridge; g_bridge = nullptr;
+
     delete g_host;
     g_host = new EmuHost();
+    g_romSize = 0;
     g_bpIds.clear();
     stop_audio();
     { std::lock_guard<std::mutex> lk(g_events.mx); g_events.q.clear(); }
@@ -499,7 +511,6 @@ drc_t start_process(const char* path, const char* input_path)
     // start paused at the entry: request a pause right away
     g_host->backend()->pause();
 
-    delete g_bridge;
     g_bridge = new BridgeServer(g_host);
     if (g_bridge->start())
         msg(PLUGIN_NAME ": control socket on 127.0.0.1:%u\n", g_bridge->port());

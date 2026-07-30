@@ -22,7 +22,21 @@ public:
     RemoteBackend() = default;
     ~RemoteBackend() override;
 
-    bool connect(const char* host = "127.0.0.1", unsigned short port = 27042);
+    // Port 0 means: find one. See discover().
+    bool connect(const char* host = "127.0.0.1", unsigned short port = 0);
+
+    // Every emulator answering on the loopback scan range, with the game each
+    // one is running. Scanning beats a file of published ports: a file left
+    // behind by a crashed session lies, and a socket that answers cannot.
+    static std::vector<SessionInfo> discover();
+
+    // Same range the server binds within; kept here so a client can scan it
+    // without depending on the server's header.
+    static constexpr unsigned short kBasePort  = 27042;
+    static constexpr unsigned short kPortRange = 16;
+
+    // Who we actually reached. Valid after a successful connect().
+    const SessionInfo& session() const { return session_; }
     void disconnect();
     bool isConnected() const { return fd_ >= 0; }
 
@@ -82,6 +96,7 @@ private:
     std::mutex  mx_;
     long long   fd_ = -1;
     std::string rxbuf_;
+    SessionInfo session_;
 
     // Cached from the last status/event so the const accessors stay cheap.
     std::atomic<bool> paused_  { false };

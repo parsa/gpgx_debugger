@@ -54,6 +54,20 @@ struct SoundState {
                            //          [6]=noise control, [7]=noise attenuation
 };
 
+// Who is on the other end of a control socket.
+//
+// Two emulators can be running at once, so an agent (or a Z80 database) that
+// connects to a fixed port has no way to know whose game it is looking at.
+// crc is the calculated ROM checksum, not the header's — a hacked or patched
+// ROM must not pass for the original.
+struct SessionInfo {
+    unsigned    pid  = 0;
+    unsigned short port = 0;
+    unsigned short crc  = 0;      // rominfo.realchecksum
+    std::string serial;           // rominfo.product
+    std::string name;             // rominfo.domestic, trimmed
+};
+
 // A viewable/editable memory region (parity with the Gens hex editor).
 // readRegion()/writeRegion() operate in LOGICAL byte order — the backend
 // applies any host byte-swapping internally.

@@ -51,10 +51,73 @@ std::vector<std::pair<std::string, std::string>> kvPairs(const std::string& s)
 
 RemoteBackend::~RemoteBackend() { disconnect(); }
 
+// A ping reply parsed into an identity. Empty pid means "not one of ours".
+static SessionInfo parsePing(const std::string& reply, unsigned short port)
+{
+    SessionInfo si;
+    if (reply.rfind("smd_dgx", 0) != 0) return si;      // someone else's socket
+    si.port = port;
+    si.pid  = 1;   // provisional: an old host answers "smd_dgx" with no fields
+    for (const auto& kv : kvPairs(reply)) {
+        if      (kv.first == "pid")    si.pid  = uint32_t(std::strtoul(kv.second.c_str(), nullptr, 10));
+        else if (kv.first == "crc")    si.crc  = uint16_t(hexU32(kv.second));
+        else if (kv.first == "serial") si.serial = kv.second;
+        else if (kv.first == "name")   si.name   = kv.second;
+    }
+    return si;
+}
+
+std::vector<SessionInfo> RemoteBackend::discover()
+{
+    std::vector<SessionInfo> found;
+    if (!sockcompat::netInit()) return found;
+
+    for (unsigned p = kBasePort; p < kBasePort + kPortRange; ++p) {
+        socket_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (fd == BAD_SOCK) continue;
+        sockcompat::suppressSigpipe(fd);
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port   = htons((unsigned short)p);
+        ::inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+
+        // Loopback: a refused connection comes back immediately, so scanning
+        // the whole range costs milliseconds and needs no timeout juggling.
+        if (::connect(fd, (sockaddr*)&addr, sizeof addr) != 0) { CLOSESOCK(fd); continue; }
+
+        const char* req = "ping\n";
+        std::string rx;
+        if (sockcompat::sendAll(fd, req, 5)) {
+            char buf[512];
+            const int n = ::recv(fd, buf, sizeof buf - 1, 0);
+            if (n > 0) rx.assign(buf, n);
+        }
+        CLOSESOCK(fd);
+
+        const size_t nl = rx.find('\n');
+        if (nl != std::string::npos) rx.resize(nl);
+        if (rx.rfind("ok ", 0) != 0) continue;
+
+        SessionInfo si = parsePing(rx.substr(3), (unsigned short)p);
+        if (si.pid) found.push_back(std::move(si));
+    }
+    return found;
+}
+
 bool RemoteBackend::connect(const char* host, unsigned short port)
 {
     disconnect();
     if (!sockcompat::netInit()) return false;
+
+    // Port 0: find one. With several emulators up this picks the lowest, which
+    // is stable and predictable; a caller that cares which game it gets should
+    // call discover() and pass the port it wants.
+    if (port == 0) {
+        const auto sessions = discover();
+        if (sessions.empty()) return false;
+        port = sessions.front().port;
+    }
 
     socket_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd == BAD_SOCK) return false;
@@ -72,7 +135,9 @@ bool RemoteBackend::connect(const char* host, unsigned short port)
     fd_ = static_cast<long long>(fd);
     rxbuf_.clear();
 
-    if (call("ping").empty()) { disconnect(); return false; }
+    const std::string pong = call("ping");
+    if (pong.empty()) { disconnect(); return false; }
+    session_ = parsePing(pong, port);
     refreshStatus();
     return true;
 }
@@ -92,13 +157,27 @@ std::string RemoteBackend::call(const std::string& line)
 
     std::string req = line;
     req += '\n';
-    if (!sockcompat::sendAll(fd, req.data(), req.size())) return {};
+    if (!sockcompat::sendAll(fd, req.data(), req.size())) {
+        // Same as a failed read: the peer is gone, so stop pretending.
+        CLOSESOCK(fd);
+        fd_ = -1;
+        running_.store(false);
+        return {};
+    }
 
     char chunk[8192];
     size_t nl;
     while ((nl = rxbuf_.find('\n')) == std::string::npos) {
         const int n = ::recv(fd, chunk, sizeof chunk, 0);
-        if (n <= 0) return {};
+        if (n <= 0) {
+            // The peer is gone. Drop the socket rather than leaving
+            // isConnected() reporting health while every read quietly
+            // returns zeros that look like real emulator state.
+            CLOSESOCK(fd);
+            fd_ = -1;
+            running_.store(false);
+            return {};
+        }
         rxbuf_.append(chunk, n);
     }
     std::string reply = rxbuf_.substr(0, nl);

@@ -23,7 +23,46 @@ import zlib
 from mcp.server.fastmcp import FastMCP, Image
 
 HOST = os.environ.get("SMD_DGX_HOST", "127.0.0.1")
-PORT = int(os.environ.get("SMD_DGX_PORT", "27042"))
+
+# A pinned port, or None to discover one. Several emulators can run at once, so
+# a hardcoded port either reaches the wrong game or nothing at all.
+_env_port = os.environ.get("SMD_DGX_PORT")
+PORT: int | None = int(_env_port) if _env_port else None
+
+BASE_PORT = 27042
+PORT_RANGE = 16
+
+
+def _ping(port: int, timeout: float = 0.25) -> dict[str, str] | None:
+    """Ask one port who it is. None if nothing of ours answers."""
+    try:
+        with socket.create_connection((HOST, port), timeout=timeout) as s:
+            s.sendall(b"ping" + bytes([10]))
+            reply = s.recv(512).decode(errors="replace").split(chr(10), 1)[0]
+    except OSError:
+        return None
+    if not reply.startswith("ok smd_dgx"):
+        return None
+    info = {"port": str(port)}
+    for tok in reply.split():
+        if "=" in tok:
+            k, v = tok.split("=", 1)
+            info[k] = v
+    return info
+
+
+def _discover() -> list[dict[str, str]]:
+    """Every emulator answering on the loopback range.
+
+    Scanning rather than reading a file of published ports: a file left behind
+    by a crashed session lies about what is running, a socket cannot.
+    """
+    out = []
+    for p in range(BASE_PORT, BASE_PORT + PORT_RANGE):
+        info = _ping(p)
+        if info:
+            out.append(info)
+    return out
 
 mcp = FastMCP("smd-dgx")
 
@@ -39,20 +78,51 @@ class Bridge:
         self._sock: socket.socket | None = None
         self._buf = b""
         self._lock = threading.Lock()
+        self._port: int | None = None      # discovered once, then sticky
+
+    def __init_port(self) -> int:
+        if PORT is not None:
+            return PORT
+        if self._port is not None:
+            return self._port
+        found = _discover()
+        if not found:
+            raise RuntimeError(
+                f"no SMD DGX emulator answering on {HOST}:"
+                f"{BASE_PORT}-{BASE_PORT + PORT_RANGE - 1} — start the game first"
+            )
+        self._port = int(found[0]["port"])
+        return self._port
+
+    def reconnect(self, port: int) -> None:
+        """Switch to a different emulator, explicitly."""
+        with self._lock:
+            self._drop()
+            self._port = int(port)
+
+    def port(self) -> int | None:
+        return self._port if PORT is None else PORT
 
     def _connect(self) -> socket.socket:
         if self._sock is None:
-            s = socket.create_connection((HOST, PORT), timeout=10)
+            port = self.__init_port()
+            s = socket.create_connection((HOST, port), timeout=10)
             s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self._sock, self._buf = s, b""
         return self._sock
 
-    def _drop(self) -> None:
+    def _drop(self, forget_port: bool = False) -> None:
         if self._sock is not None:
             try:
                 self._sock.close()
             finally:
                 self._sock, self._buf = None, b""
+        # The silent retry reconnects to the SAME port on purpose. Rediscovering
+        # here would let a reconnect land on a different game mid-session, and
+        # every later answer would be about something the caller never asked
+        # for. Only an explicit reconnect() may change target.
+        if forget_port:
+            self._port = None
 
     def command(self, line: str) -> str:
         """Send one command, return the reply without its 'ok ' prefix.
@@ -75,8 +145,8 @@ class Bridge:
                     self._drop()
                     if attempt == 2:
                         raise RuntimeError(
-                            f"cannot reach the SMD DGX bridge at {HOST}:{PORT} — "
-                            "is the emulator started in IDA?"
+                            f"cannot reach the SMD DGX bridge at {HOST}:"
+                            f"{self._port or PORT} — is the emulator running?"
                         )
 
         reply = raw.decode(errors="replace").strip()
@@ -132,6 +202,42 @@ def _hex(value: str) -> str:
         s = s[2:]
     s = s.lstrip("0")
     return s or "0"
+
+
+# ---------------------------------------------------------------------------
+# sessions
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def list_sessions() -> list[dict[str, str]]:
+    """Every emulator currently running, with the game each one has loaded.
+
+    Returns port, pid, crc (the ROM's calculated checksum), serial and name.
+    Use connect_session to pick one; without a choice the first is used.
+    """
+    return _discover()
+
+
+@mcp.tool()
+def connect_session(port: int) -> str:
+    """Point every later tool call at the emulator on this port.
+
+    Only needed when more than one is running — see list_sessions.
+    """
+    info = _ping(int(port))
+    if info is None:
+        raise RuntimeError(f"nothing answering on {HOST}:{port}")
+    bridge.reconnect(int(port))
+    name = info.get("name", "-")
+    return f"connected to port {port} (pid {info.get('pid', '?')}, {name})"
+
+
+@mcp.tool()
+def current_session() -> dict[str, str]:
+    """Which emulator these tools are talking to right now."""
+    bridge.command("ping")          # forces a connection if there is not one
+    port = bridge.port()
+    info = _ping(port) if port else None
+    return info or {"port": str(port or 0)}
 
 
 # ---------------------------------------------------------------------------

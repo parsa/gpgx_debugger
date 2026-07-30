@@ -59,6 +59,10 @@ public:
 
     void onCpuHook(int type, int width, uint32_t addr, uint32_t value);
 
+    // Identity of the loaded game, for clients that must pick between several
+    // running emulators. Empty until a ROM is loaded.
+    SessionInfo sessionInfo() const;
+
     // Codemap ("changed"): executed pc -> predecessor pc, accumulated during
     // execution, drained (and cleared) atomically with each pause. Used by the
     // IDA host for auto_make_code() on everything executed.

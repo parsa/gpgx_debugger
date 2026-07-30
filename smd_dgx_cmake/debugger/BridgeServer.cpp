@@ -62,24 +62,45 @@ uint32_t parseU32(const std::string& s, int base = 16)
     return static_cast<uint32_t>(std::strtoul(s.c_str(), nullptr, base));
 }
 
+
+unsigned currentPid()
+{
+#ifdef _WIN32
+    return (unsigned)GetCurrentProcessId();
+#else
+    return (unsigned)getpid();
+#endif
+}
+
+// The reply is whitespace-separated key=value, so a value may contain neither.
+// Game titles contain both, routinely.
+std::string sanitise(const std::string& in)
+{
+    std::string out;
+    out.reserve(in.size());
+    for (char c : in) {
+        const bool bad = (c == ' ') || (c == '=') || (c == ':')
+                      || (unsigned char)c < 0x20 || (unsigned char)c > 0x7E;
+        out += bad ? '_' : c;
+    }
+    return out;
+}
+
 } // namespace
 
-// ---------------------------------------------------------------------------
-bool BridgeServer::start(unsigned short port)
+// Try one port. Returns true and fills fd on success; leaves fd untouched
+// otherwise, so the caller can simply try the next.
+bool BridgeServer::bindOne(unsigned short p, long long& fdOut)
 {
-    stop();
-    stopFlag_.store(false);
-
-    if (!sockcompat::netInit()) return false;
-
     socket_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd == BAD_SOCK) return false;
 
     // Exclusivity, not reuse. On Windows SO_REUSEADDR lets a SECOND process
-    // bind a port that is already listening: both emulators would report
-    // "control socket on 27042", and whichever the kernel picked would get the
-    // clients while the other sat there looking healthy and unreachable. On
-    // POSIX SO_REUSEADDR only skips TIME_WAIT, which is what we want there.
+    // bind a port that is already listening: both emulators would claim the
+    // same one, whichever the kernel favoured would get every client, and the
+    // other would sit there looking healthy and unreachable — which also makes
+    // scanning for a free port meaningless. On POSIX SO_REUSEADDR only skips
+    // TIME_WAIT, which is what we want there.
     int yes = 1;
 #ifdef _WIN32
     ::setsockopt(fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&yes, sizeof yes);
@@ -89,7 +110,7 @@ bool BridgeServer::start(unsigned short port)
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_port   = htons(port);
+    addr.sin_port   = htons(p);
     // Loopback only: this is an unauthenticated control channel with full
     // memory read/write over the emulated machine — it must never be reachable
     // from another host.
@@ -99,9 +120,43 @@ bool BridgeServer::start(unsigned short port)
         CLOSESOCK(fd);
         return false;
     }
+    fdOut = static_cast<long long>(fd);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+bool BridgeServer::start(unsigned short port)
+{
+    stop();
+    stopFlag_.store(false);
+
+    if (!sockcompat::netInit()) return false;
+
+    // An explicit port must be honoured exactly — a caller that asked for one
+    // wants to fail loudly, not land somewhere else. Only the default scans.
+    unsigned short first = port, last = port;
+    if (port == 0) {
+        if (const char* env = std::getenv("SMD_DGX_PORT")) {
+            const unsigned v = (unsigned)std::strtoul(env, nullptr, 10);
+            if (v > 0 && v < 65536) { first = last = (unsigned short)v; }
+            else { first = kBasePort; last = kBasePort + kPortRange - 1; }
+        } else {
+            first = kBasePort;
+            last  = kBasePort + kPortRange - 1;
+        }
+    }
+
+    socket_t fd = BAD_SOCK;
+    for (unsigned p = first; p <= last; ++p) {
+        long long got = -1;
+        if (!bindOne((unsigned short)p, got)) continue;
+        fd = (socket_t)got;
+        port_ = (unsigned short)p;
+        break;
+    }
+    if (fd == BAD_SOCK) return false;
 
     listenFd_ = static_cast<long long>(fd);
-    port_     = port;
     running_.store(true);
     sinkId_ = host_->addEventSink([this](const DebugEvent& ev) { onEmuEvent(&ev); });
     thread_   = std::thread(&BridgeServer::serve, this);
@@ -288,7 +343,18 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
 
     auto arg = [&is]() { std::string s; is >> s; return s; };
 
-    if (cmd == "ping")    return "ok smd_dgx";
+    // Identity, not just liveness: with several emulators running, a client
+    // that only knows "something answered" cannot tell whose game it is.
+    if (cmd == "ping") {
+        const SessionInfo si = host_->gpgx()->sessionInfo();
+        std::ostringstream o;
+        o << "ok smd_dgx pid=" << std::dec << currentPid()
+          << " port=" << port_
+          << " crc=" << std::hex << si.crc
+          << " serial=" << (si.serial.empty() ? "-" : sanitise(si.serial))
+          << " name=" << (si.name.empty() ? "-" : sanitise(si.name));
+        return o.str();
+    }
 
     if (cmd == "status") {
         char out[128];
