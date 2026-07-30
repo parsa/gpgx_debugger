@@ -1257,3 +1257,34 @@ the following license:
  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  POSSIBILITY OF SUCH DAMAGE.
+
+----------------------------------------------------------------------------------------
+
+SMD DGX — debugger, IDA modules, MCP server
+-------------------------------------------
+
+Everything under smd_dgx_cmake/ that is not listed below is part of this fork
+and is released under the Genesis Plus GX license at the top of this file, with
+the same non-commercial terms.
+
+The following component is an EXCEPTION and carries a different licence:
+
+  smd_dgx_cmake/ida_loader/z80_loader.cpp
+  smd_dgx_cmake/ida_loader/z80_loader.h
+
+    Sega Mega Drive / Genesis Z80 sound driver loader for IDA.
+    Copyright (c) DrMefistO [Lab 313] <newinferno@gmail.com>
+    Ported, with modifications, from https://github.com/lab313ru/smd_ida_tools2
+
+    Licensed under the GNU General Public License, version 2, as published by
+    the Free Software Foundation. A copy is available at
+    https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+    These two files build into a standalone IDA loader module
+    (smd_dgx_z80_ldr) and are not linked into the emulator, the debugger
+    library or any other target in this repository.
+
+The IDA SDK is NOT redistributed here. Building the IDA modules requires the
+SDK separately; it is published by Hex-Rays under the MIT licence at
+https://github.com/HexRaysSA/ida-sdk . Any SDK signatures quoted in comments or
+in smd_dgx_cmake/ida_plugin/IDA93_SDK_NOTES.md are used under that licence.

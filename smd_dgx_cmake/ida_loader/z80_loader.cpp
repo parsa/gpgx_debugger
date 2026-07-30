@@ -3,11 +3,19 @@
 *      SEGA MEGA DRIVE/GENESIS Z80 Drivers Loader
 *      Author: DrMefistO [Lab 313] <newinferno@gmail.com>
 *
-*      Ported into SMD DGX from smd_ida_tools2/z80_loader, essentially intact:
-*      the segment map, the hardware port names and the YM2612 register enums
-*      are the same hardware, and there was nothing to improve about them.
-*      Changes: file dialogs no longer pop an info() box on every load, and
-*      accept_file no longer claims every small file in existence.
+*      Ported into SMD DGX from https://github.com/lab313ru/smd_ida_tools2,
+*      essentially intact: the segment map, the hardware port names and the
+*      YM2612 register enums describe the same hardware, and there was nothing
+*      to improve about them. Changes: file dialogs no longer pop an info() box
+*      on every load, and accept_file no longer claims every small file in
+*      existence.
+*
+*      LICENCE — this file differs from the rest of the repository.
+*      smd_ida_tools2 is GPL-2, so this file and z80_loader.h are licensed
+*      under the GNU General Public License version 2 or later, NOT under the
+*      Genesis Plus GX licence that covers everything else here. They build
+*      into a standalone IDA loader module and are linked into nothing else.
+*      See LICENSE.txt at the repository root.
 */
 
 #define _CRT_SECURE_NO_WARNINGS
