@@ -626,13 +626,40 @@ INLINE void BURNODD(int cycles, int opcodes, int cyclesum)
 
 /***************************************************************
  * Read a byte from given memory location
- ***************************************************************/
-#define RM(addr) z80_readmem(addr)
-
-/***************************************************************
  * Write a byte to given memory location
+ *
+ * Every data access the Z80 makes goes through these two — RM16/WM16 and
+ * every instruction are built on them — so hooking here covers the whole CPU.
+ * Opcode and immediate-operand fetches deliberately do not pass through: they
+ * use cpu_readop (see ROP/ARG below), so an instruction fetch never trips a
+ * data breakpoint on the code it is fetching.
  ***************************************************************/
+#ifdef HOOK_CPU
+
+INLINE UINT8 z80_rm_hooked(UINT32 addr)
+{
+  UINT8 val = z80_readmem(addr);
+  if (cpu_hook)
+    cpu_hook(HOOK_Z80_R, 1, addr & 0xFFFF, val);
+  return val;
+}
+
+INLINE void z80_wm_hooked(UINT32 addr, UINT8 value)
+{
+  z80_writemem(addr, value);
+  if (cpu_hook)
+    cpu_hook(HOOK_Z80_W, 1, addr & 0xFFFF, value);
+}
+
+#define RM(addr) z80_rm_hooked(addr)
+#define WM(addr,value) z80_wm_hooked(addr,value)
+
+#else
+
+#define RM(addr) z80_readmem(addr)
 #define WM(addr,value) z80_writemem(addr,value)
+
+#endif
 
 /***************************************************************
  * Read a word from given memory location

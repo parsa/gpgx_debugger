@@ -217,6 +217,94 @@ TEST(m68k_execution_breakpoint_fires_at_the_address)
 // address the test picks)
 
 // ---------------------------------------------------------------------------
+// Data breakpoints.
+//
+// These could be set but could never fire: the core emitted no memory hooks at
+// all, so nothing ever asked whether an access matched. A missing feature that
+// looks present is worse than an absent one — "what wrote this address?" got a
+// confident silence.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Park the 68000 on the data routine and arm one breakpoint. Returns whether
+// the machine stopped within the deadline.
+bool dataBpFires(t::Emu& e, BpType type, uint32_t start, uint32_t end, int ms = 1500)
+{
+    e.parkM68kAt(kDataEntry);
+    Breakpoint bp;
+    bp.type = type; bp.cpu = Cpu::M68K; bp.is_vdp = false;
+    bp.start = start; bp.end = end;
+    e.backend()->addBreakpoint(bp);
+
+    const uint64_t s = e.pauseSeq();
+    e.backend()->resume();
+    const bool hit = e.waitPause(s, ms);
+    e.backend()->clearBreakpoints();
+    if (!hit) { e.backend()->pause(); e.waitPause(s); }
+    return hit;
+}
+
+} // namespace
+
+TEST(m68k_write_breakpoint_fires)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+
+    CHECK(dataBpFires(e, BpType::Write, kDataAddr, kDataAddr));
+    // The write really happened, so this is the instruction we stopped on.
+    const auto v = e.backend()->readMemory(kDataAddr, 4);
+    REQUIRE(v.size() == 4);
+    CHECK_EQ((uint32_t(v[0]) << 24) | (v[1] << 16) | (v[2] << 8) | v[3], kDataValue);
+}
+
+// THE WIDTH CASE: a longword write to FF4276 touches FF4276..FF4279, so a
+// breakpoint on FF4278 must see it. Comparing only the access's start address
+// silently misses every access that straddles the watched byte — and those are
+// the majority, because the interesting variables are rarely longword-aligned.
+TEST(m68k_write_breakpoint_sees_a_straddling_longword)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+
+    CHECK(dataBpFires(e, BpType::Write, kDataAddr + 2, kDataAddr + 2));
+}
+
+TEST(m68k_write_breakpoint_ignores_the_byte_past_the_access)
+{
+    // The other half of the contract: overlap, not "anywhere nearby".
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+
+    CHECK(!dataBpFires(e, BpType::Write, kDataAddr + 4, kDataAddr + 4, 700));
+}
+
+TEST(m68k_read_breakpoint_fires)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+
+    CHECK(dataBpFires(e, BpType::Read, kDataAddr, kDataAddr));
+}
+
+TEST(m68k_read_breakpoint_does_not_fire_on_a_write)
+{
+    // A read breakpoint that also trips on writes is not a read breakpoint.
+    // The routine writes before it reads, so a confused implementation stops
+    // one instruction early — at kDataEntry rather than kDataRead.
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+
+    REQUIRE(dataBpFires(e, BpType::Read, kDataAddr, kDataAddr));
+    CHECK_EQ(e.pausePc(), kDataRead);
+}
+
+// ---------------------------------------------------------------------------
 // Z80 run control. The ROM's bring-up releases the bus, so the Z80 is really
 // executing by the time these run.
 // ---------------------------------------------------------------------------
@@ -346,6 +434,59 @@ TEST(z80_breakpoint_fires_and_reports_z80)
     e.backend()->resume();
     REQUIRE(e.waitPause(s, 3000));
     CHECK_EQ(e.pausePc(), kZ80Loop);
+    CHECK(e.pauseCpu() == Cpu::Z80);
+    e.backend()->clearBreakpoints();
+}
+
+// The Z80 half of the same gap. Three layers were silently inert: the core
+// emitted no HOOK_Z80_R/W, onCpuHook had no branch for them, and
+// matchBreakpoint did not even classify those bits as reads or writes.
+TEST(z80_write_breakpoint_fires)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+    REQUIRE(armZ80(e));
+
+    Z80Regs z = e.backend()->getZ80Regs();
+    z.pc = kZ80DataEntry;
+    e.backend()->setZ80Regs(z);
+
+    Breakpoint bp;
+    bp.type = BpType::Write; bp.cpu = Cpu::Z80; bp.is_vdp = false;
+    bp.start = kZ80DataAddr; bp.end = kZ80DataAddr;
+    e.backend()->addBreakpoint(bp);
+
+    const uint64_t s = e.pauseSeq();
+    e.backend()->resume();
+    REQUIRE(e.waitPause(s, 3000));
+    CHECK(e.pauseCpu() == Cpu::Z80);      // not the 68000's PC
+
+    const auto v = e.backend()->readZ80Memory(kZ80DataAddr, 1);
+    REQUIRE(v.size() == 1);
+    CHECK_EQ(v[0], kZ80DataValue);
+    e.backend()->clearBreakpoints();
+}
+
+TEST(z80_read_breakpoint_fires)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+    REQUIRE(armZ80(e));
+
+    Z80Regs z = e.backend()->getZ80Regs();
+    z.pc = kZ80DataRead;                  // straight to the load, past the store
+    e.backend()->setZ80Regs(z);
+
+    Breakpoint bp;
+    bp.type = BpType::Read; bp.cpu = Cpu::Z80; bp.is_vdp = false;
+    bp.start = kZ80DataAddr; bp.end = kZ80DataAddr;
+    e.backend()->addBreakpoint(bp);
+
+    const uint64_t s = e.pauseSeq();
+    e.backend()->resume();
+    CHECK(e.waitPause(s, 3000));
     CHECK(e.pauseCpu() == Cpu::Z80);
     e.backend()->clearBreakpoints();
 }

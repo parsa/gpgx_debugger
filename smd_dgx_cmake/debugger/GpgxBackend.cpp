@@ -487,6 +487,11 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t /*value
         if (matchBreakpoint(type, addr, width)) firePause(lastPc_);
     } else if (type & HOOK_Z80_E) {
         onZ80Exec(addr & 0xFFFF);
+    } else if (type & (HOOK_Z80_R | HOOK_Z80_W)) {
+        // Report the Z80's own PC, not the 68000's: a sound driver writing to
+        // its work RAM is a Z80 event, and stopping at a 68000 address would
+        // point the user at code that has nothing to do with it.
+        if (matchBreakpoint(type, addr & 0xFFFF, width)) firePause(lastPcZ80_, Cpu::Z80);
     } else if (type & (HOOK_VRAM_R | HOOK_VRAM_W | HOOK_CRAM_R | HOOK_CRAM_W |
                        HOOK_VSRAM_R | HOOK_VSRAM_W)) {
         // The core reports an offset within one VDP memory; breakpoints live in
@@ -545,8 +550,10 @@ bool GpgxBackend::matchBreakpoint(int type, uint32_t addr, int width)
     // breakpoint must name its processor or a Z80 address matches 68000 code.
     const Cpu cpu = (type & (HOOK_Z80_E | HOOK_Z80_R | HOOK_Z80_W)) ? Cpu::Z80 : Cpu::M68K;
 
-    const bool isRead  = (type & (HOOK_M68K_R | HOOK_VRAM_R | HOOK_CRAM_R | HOOK_VSRAM_R)) != 0;
-    const bool isWrite = (type & (HOOK_M68K_W | HOOK_VRAM_W | HOOK_CRAM_W | HOOK_VSRAM_W)) != 0;
+    const bool isRead  = (type & (HOOK_M68K_R | HOOK_Z80_R
+                                | HOOK_VRAM_R | HOOK_CRAM_R | HOOK_VSRAM_R)) != 0;
+    const bool isWrite = (type & (HOOK_M68K_W | HOOK_Z80_W
+                                | HOOK_VRAM_W | HOOK_CRAM_W | HOOK_VSRAM_W)) != 0;
     const bool isExec  = (type & (HOOK_M68K_E | HOOK_Z80_E)) != 0;
 
     // Collect matches under the lock, evaluate conditions outside it: the

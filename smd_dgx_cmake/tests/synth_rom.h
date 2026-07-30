@@ -24,6 +24,15 @@ constexpr uint32_t kSubEntry  = 0x0300;   // nop; rts — the jsr target
 constexpr uint32_t kSubRts    = 0x0302;
 constexpr uint32_t kInitSp    = 0x00FFF000;
 
+// Data-access routine, for read/write breakpoints. The longword write is the
+// interesting one: it touches four bytes, so a breakpoint anywhere inside it
+// has to fire — comparing only the start address misses every access that
+// straddles the watched byte.
+constexpr uint32_t kDataEntry = 0x0240;   // move.l #imm,(kDataAddr)
+constexpr uint32_t kDataRead  = 0x024A;   // move.l (kDataAddr),d0
+constexpr uint32_t kDataAddr  = 0x00FF4276;
+constexpr uint32_t kDataValue = 0x12345678;
+
 // Marker bytes at a known offset, so a test can prove the byte-order contract
 // end to end rather than trusting a comment: the logical byte at A must come
 // back from address A, whatever the host endianness does to the storage.
@@ -87,6 +96,16 @@ inline std::vector<uint8_t> buildRom()
     put16be(rom, kSubEntry, 0x4E71);           // nop
     put16be(rom, kSubRts,   0x4E75);           // rts
 
+    // 0240  23FC iiiiiiii aaaaaaaa   move.l #kDataValue,(kDataAddr).L
+    // 024A  2039 aaaaaaaa            move.l (kDataAddr).L,d0
+    // 0250  60FE                     bra.s *      (park here, never returns)
+    put16be(rom, kDataEntry + 0, 0x23FC);
+    put32be(rom, kDataEntry + 2, kDataValue);
+    put32be(rom, kDataEntry + 6, kDataAddr);
+    put16be(rom, kDataRead + 0, 0x2039);
+    put32be(rom, kDataRead + 2, kDataAddr);
+    put16be(rom, kDataRead + 6, 0x60FE);
+
     const char* m = markerText();
     for (uint32_t i = 0; m[i]; ++i) rom[kMarkerAddr + i] = uint8_t(m[i]);
 
@@ -110,6 +129,13 @@ constexpr uint16_t kZ80CallTaken  = 0x0007;
 constexpr uint16_t kZ80Loop       = 0x000A;
 constexpr uint16_t kZ80Sub        = 0x0020;
 
+// Data-access routine, reached by setting PC — the same job as kDataEntry on
+// the 68000 side. Writes then reads its own work RAM.
+constexpr uint16_t kZ80DataEntry = 0x0030;
+constexpr uint16_t kZ80DataRead  = 0x0035;
+constexpr uint16_t kZ80DataAddr  = 0x1000;
+constexpr uint8_t  kZ80DataValue = 0x55;
+
 inline std::vector<uint8_t> buildZ80()
 {
     std::vector<uint8_t> z(0x40, 0x00);
@@ -122,6 +148,14 @@ inline std::vector<uint8_t> buildZ80()
     };
     for (size_t i = 0; i < sizeof prog; ++i) z[i] = prog[i];
     z[kZ80Sub] = 0xC9;          // 0020 ret
+
+    const uint8_t data[] = {
+        0x3E, kZ80DataValue,    // 0030 ld a,$55
+        0x32, 0x00, 0x10,       // 0032 ld ($1000),a
+        0x3A, 0x00, 0x10,       // 0035 ld a,($1000)
+        0x18, 0xFE,             // 0038 jr $0038
+    };
+    for (size_t i = 0; i < sizeof data; ++i) z[kZ80DataEntry + i] = data[i];
     return z;
 }
 
