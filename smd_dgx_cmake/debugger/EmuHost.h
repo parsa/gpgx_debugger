@@ -81,6 +81,9 @@ public:
     // the emulator is not running (fn is then not executed).
     bool invoke(const std::function<void()>& fn);
 
+    // Run n more frames, then pause. Zero cancels a pending advance.
+    void advanceFrames(int n) { framesLeft_.store(n < 0 ? 0 : n); }
+
     // Copy the visible viewport as tightly packed RGB565 (w*h*2 bytes). Call
     // from the emulation thread — i.e. through invoke() — so the framebuffer
     // is not being redrawn underneath.
@@ -104,6 +107,7 @@ private:
     std::thread       thread_;
     std::atomic<bool> stopFlag_ { false };
     std::atomic<bool> running_  { false };
+    std::atomic<int>  framesLeft_ { 0 };   // frame-advance countdown
 
     // Work handed to the emulation thread by invoke().
     struct Task { const std::function<void()>* fn; bool done; };

@@ -58,6 +58,7 @@ struct DebugEvent {
     Type     type{};
     Cpu      cpu = Cpu::M68K;   // which processor stopped
     uint32_t pc  = 0;
+    int      bpId = -1;         // breakpoint that caused it, or -1
     std::map<uint32_t, uint32_t> changed;   // executed pc -> predecessor pc
 };
 

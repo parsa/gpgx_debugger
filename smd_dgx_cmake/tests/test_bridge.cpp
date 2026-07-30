@@ -11,6 +11,7 @@
 
 #include "debugger/BridgeServer.h"
 #include "debugger/RemoteBackend.h"
+#include "debugger/SocketCompat.h"
 
 #include <algorithm>
 #include <thread>
@@ -230,6 +231,157 @@ TEST(bridge_serves_two_clients_independently)
     while (second.pollEvent(ev))  ++seenB;
     CHECK(seenA > 0);
     CHECK(seenB > 0);
+}
+
+// ---------------------------------------------------------------------------
+// The agent loop: set a breakpoint, resume, wait, look, advance frames.
+//
+// These are the primitives that make the bridge usable without a human in the
+// loop. Polling `events` can substitute for `wait` only by burning CPU, and
+// nothing at all could substitute for frame-accurate advance: while the machine
+// is being debugged it is not bound to the wall clock, so an agent cannot time
+// an input by sleeping.
+// ---------------------------------------------------------------------------
+
+// Raw access, because these commands have no IDebugBackend counterpart.
+namespace {
+
+struct Line {
+    RemoteBackend* rb;
+    // The protocol is one line in, one line out; RemoteBackend::call is private,
+    // so the tests speak it directly over their own socket.
+};
+
+class Raw {
+public:
+    bool connect(unsigned short port)
+    {
+        sockcompat::netInit();
+        fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (fd_ == BAD_SOCK) return false;
+        sockaddr_in a{};
+        a.sin_family = AF_INET;
+        a.sin_port = htons(port);
+        ::inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
+        return ::connect(fd_, (sockaddr*)&a, sizeof a) == 0;
+    }
+    ~Raw() { if (fd_ != BAD_SOCK) CLOSESOCK(fd_); }
+
+    std::string cmd(const std::string& c)
+    {
+        std::string req = c + "\n";
+        if (!sockcompat::sendAll(fd_, req.data(), req.size())) return {};
+        char buf[65536];
+        size_t nl;
+        while ((nl = rx_.find('\n')) == std::string::npos) {
+            const int n = ::recv(fd_, buf, sizeof buf, 0);
+            if (n <= 0) return {};
+            rx_.append(buf, n);
+        }
+        std::string r = rx_.substr(0, nl);
+        rx_.erase(0, nl + 1);
+        return r;
+    }
+
+private:
+    socket_t fd_ = BAD_SOCK;
+    std::string rx_;
+};
+
+} // namespace
+
+TEST(bridge_wait_blocks_until_a_breakpoint_and_names_it)
+{
+    Wired w(10);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(10)));
+
+    Breakpoint bp;
+    bp.type = BpType::PC; bp.cpu = Cpu::M68K; bp.is_vdp = false;
+    bp.start = kSubEntry; bp.end = kSubEntry;
+    const int id = w.emu.backend()->addBreakpoint(bp);
+    REQUIRE(id > 0);
+
+    w.emu.backend()->resume();
+    const std::string r = raw.cmd("wait 4000");
+    // ok paused pc=... cpu=m68k bp=<id> seq=...
+    CHECK(r.rfind("ok paused", 0) == 0);
+    char want[32];
+    std::snprintf(want, sizeof want, "bp=%d", id);
+    CHECK(r.find(want) != std::string::npos);      // WHICH breakpoint, not just that one hit
+    CHECK(r.find("cpu=m68k") != std::string::npos);
+
+    w.emu.backend()->clearBreakpoints();
+}
+
+TEST(bridge_wait_reports_timeout_rather_than_hanging)
+{
+    Wired w(11);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(11)));
+
+    w.emu.backend()->resume();                     // nothing armed: nothing to stop on
+    CHECK_STR(raw.cmd("wait 400"), "ok timeout");
+}
+
+TEST(bridge_frame_advance_runs_exactly_that_many_frames)
+{
+    Wired w(12);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(12)));
+
+    CHECK_STR(raw.cmd("frameadv 3"), "ok");
+    const std::string r = raw.cmd("wait 4000");
+    CHECK(r.rfind("ok paused", 0) == 0);
+    CHECK(r.find("bp=-1") != std::string::npos);   // stopped by the advance, not a breakpoint
+    CHECK(w.emu.backend()->isPaused());
+}
+
+TEST(bridge_search_finds_a_pattern_in_a_region)
+{
+    Wired w(13);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(13)));
+
+    // Our own marker, at a known ROM offset.
+    const std::string pat = "534D442D444758";           // "SMD-DGX"
+    const std::string r = raw.cmd("search 0 " + pat + " 16");
+    REQUIRE(r.rfind("ok", 0) == 0);
+
+    char want[32];
+    std::snprintf(want, sizeof want, "%x", kMarkerAddr);
+    CHECK(r.find(want) != std::string::npos);
+
+    // A pattern that is not there returns success with no hits, not an error.
+    CHECK_STR(raw.cmd("search 0 deadbeefcafe 16"), "ok");
+}
+
+TEST(bridge_diff_reports_what_changed_since_the_snapshot)
+{
+    Wired w(14);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(14)));
+
+    // Region 1 is 68000 work RAM.
+    REQUIRE(raw.cmd("snap 1").rfind("ok", 0) == 0);
+    CHECK_STR(raw.cmd("diff 1 8"), "ok");          // nothing has moved yet
+
+    const uint8_t v[2] = { 0xA5, 0x5A };
+    w.emu.backend()->writeRegion(1, 0x0500, v, 2);
+
+    const std::string r = raw.cmd("diff 1 8");
+    REQUIRE(r.rfind("ok ", 0) == 0);
+    CHECK(r.find("500:") != std::string::npos);    // offset:old:new
+    CHECK(r.find(":a5") != std::string::npos);
+    CHECK(r.find("501:") != std::string::npos);
+
+    // A region never snapped is an error, not a silent empty result.
+    CHECK(raw.cmd("diff 3 8").rfind("err", 0) == 0);
 }
 
 TEST(bridge_rejects_absurd_sizes_instead_of_allocating)

@@ -3,6 +3,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -46,18 +47,24 @@ private:
         uint8_t  type;      // DebugEvent::Type
         uint8_t  cpu;       // Cpu
         uint32_t pc;
+        int32_t  bpId;      // which breakpoint, or -1
     };
 
     struct Client {
         long long fd = -1;
         std::deque<QueuedEvent> events;
         uint64_t dropped = 0;       // overflowed events; reported once, then cleared
+        // Snapshots for `snap`/`diff`, per client and per region: the classic
+        // RAM-search loop, done here so an agent compares 64K of memory
+        // without hauling it across the wire as ASCII hex every round.
+        std::map<int, std::vector<uint8_t>> snaps;
     };
 
     void serve();                                   // accept loop
     void serveClient(std::shared_ptr<Client> c);    // one connection
     std::string handle(const std::string& line, Client& c);
     std::string handleEvents(Client& c, int max);
+    std::string handleWait(Client& c, int timeoutMs);
     void onEmuEvent(const void* ev);                // DebugEvent, type-erased for the header
 
     EmuHost*          host_ = nullptr;
@@ -68,6 +75,9 @@ private:
     long long         listenFd_ = -1;
     int               sinkId_ = -1;     // our registration on the host
 
+    // Signalled when an event is queued, so `wait` can block instead of
+    // making every client poll.
+    std::condition_variable               eventCv_;
     std::mutex                            clientsMx_;
     std::vector<std::shared_ptr<Client>>  clients_;
     std::vector<std::thread>              clientThreads_;

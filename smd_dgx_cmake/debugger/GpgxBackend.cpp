@@ -481,17 +481,20 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t /*value
         trackCall(addr);
         bool brk = stepInto_.exchange(false);
         if (!brk) { int so = stepOverAddr_.load(); if (so >= 0 && (uint32_t)so == addr) { stepOverAddr_.store(-1); brk = true; } }
-        if (!brk) brk = matchBreakpoint(type, addr, 2);   // opcode word
-        if (brk) firePause(addr);
+        int hit = -1;
+        if (!brk) { hit = matchBreakpoint(type, addr, 2); brk = hit >= 0; }  // opcode word
+        if (brk) firePause(addr, Cpu::M68K, hit);
     } else if (type & (HOOK_M68K_R | HOOK_M68K_W)) {
-        if (matchBreakpoint(type, addr, width)) firePause(lastPc_);
+        const int hit = matchBreakpoint(type, addr, width);
+        if (hit >= 0) firePause(lastPc_, Cpu::M68K, hit);
     } else if (type & HOOK_Z80_E) {
         onZ80Exec(addr & 0xFFFF);
     } else if (type & (HOOK_Z80_R | HOOK_Z80_W)) {
         // Report the Z80's own PC, not the 68000's: a sound driver writing to
         // its work RAM is a Z80 event, and stopping at a 68000 address would
         // point the user at code that has nothing to do with it.
-        if (matchBreakpoint(type, addr & 0xFFFF, width)) firePause(lastPcZ80_, Cpu::Z80);
+        const int hit = matchBreakpoint(type, addr & 0xFFFF, width);
+        if (hit >= 0) firePause(lastPcZ80_, Cpu::Z80, hit);
     } else if (type & (HOOK_VRAM_R | HOOK_VRAM_W | HOOK_CRAM_R | HOOK_CRAM_W |
                        HOOK_VSRAM_R | HOOK_VSRAM_W)) {
         // The core reports an offset within one VDP memory; breakpoints live in
@@ -499,7 +502,8 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t /*value
         uint32_t linear = addr & 0xFFFF;
         if (type & (HOOK_CRAM_R  | HOOK_CRAM_W))  linear += VDP_BP_CRAM;
         else if (type & (HOOK_VSRAM_R | HOOK_VSRAM_W)) linear += VDP_BP_VSRAM;
-        if (matchBreakpoint(type, linear, width)) firePause(lastPc_);
+        const int hit = matchBreakpoint(type, linear, width);
+        if (hit >= 0) firePause(lastPc_, Cpu::M68K, hit);
     }
 }
 
@@ -521,9 +525,10 @@ void GpgxBackend::abortRunControl()
     resume();
 }
 
-void GpgxBackend::firePause(uint32_t pc, Cpu cpu)
+void GpgxBackend::firePause(uint32_t pc, Cpu cpu, int bpId)
 {
     if (abandoned_.load()) return;      // shutting down: do not park the thread
+    lastBpId_.store(bpId);
     paused_.store(true);
     if (pauseCb_) pauseCb_(pc, cpu);
     // Block the emulation thread until resumed. While blocked, pump host
@@ -535,9 +540,12 @@ void GpgxBackend::firePause(uint32_t pc, Cpu cpu)
     }
 }
 
-bool GpgxBackend::matchBreakpoint(int type, uint32_t addr, int width)
+// Returns the id of the breakpoint that matched, or -1. Which one matched is
+// what an agent actually needs: it sets several and then has to know which of
+// them it is now looking at.
+int GpgxBackend::matchBreakpoint(int type, uint32_t addr, int width)
 {
-    if (bpCount_.load(std::memory_order_relaxed) == 0) return false;   // hot path
+    if (bpCount_.load(std::memory_order_relaxed) == 0) return -1;   // hot path
 
     // A VDP access carries an address in the VDP linear space, so it may only
     // match breakpoints marked is_vdp — and a bus breakpoint must never be
@@ -559,7 +567,7 @@ bool GpgxBackend::matchBreakpoint(int type, uint32_t addr, int width)
     // Collect matches under the lock, evaluate conditions outside it: the
     // evaluator calls into the client (IDA), which must not be done while
     // holding a lock the client's own thread may end up waiting on.
-    std::vector<std::pair<uint32_t, std::string>> pending;   // elang + expression
+    std::vector<std::tuple<int, uint32_t, std::string>> pending;   // id + elang + expr
     {
         std::lock_guard<std::mutex> lk(bpMutex_);
         for (const auto& bp : breakpoints_) {
@@ -576,17 +584,18 @@ bool GpgxBackend::matchBreakpoint(int type, uint32_t addr, int width)
             const uint32_t last = addr + uint32_t(width > 0 ? width - 1 : 0);
             if (last < bp.start || addr > bp.end) continue;
 
-            if (bp.condition.empty()) return true;          // unconditional: done
-            pending.emplace_back(bp.elang, bp.condition);
+            if (bp.condition.empty()) return bp.id;         // unconditional: done
+            pending.emplace_back(bp.id, bp.elang, bp.condition);
         }
     }
 
-    if (pending.empty()) return false;
-    if (!condEval_) return true;    // nobody can judge the condition; err on stopping
+    if (pending.empty()) return -1;
+    // Nobody can judge the conditions; err on stopping rather than skipping.
+    if (!condEval_) return std::get<0>(pending.front());
 
     for (const auto& c : pending)
-        if (condEval_(c.first, c.second)) return true;
-    return false;
+        if (condEval_(std::get<1>(c), std::get<2>(c))) return std::get<0>(c);
+    return -1;
 }
 
 
@@ -701,10 +710,11 @@ void GpgxBackend::onZ80Exec(uint32_t pc)
         const int so = stepOverAddrZ80_.load();
         if (so >= 0 && uint32_t(so) == pc) { stepOverAddrZ80_.store(-1); brk = true; }
     }
-    if (!brk) brk = matchBreakpoint(HOOK_Z80_E, pc);
+    int hit = -1;
+    if (!brk) { hit = matchBreakpoint(HOOK_Z80_E, pc); brk = hit >= 0; }
     if (brk) {
         z80ResumeSkip_.store(int(pc));
-        firePause(pc, Cpu::Z80);
+        firePause(pc, Cpu::Z80, hit);
     }
 }
 

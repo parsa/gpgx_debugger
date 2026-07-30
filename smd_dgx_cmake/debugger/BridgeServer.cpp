@@ -1,6 +1,7 @@
 #include "BridgeServer.h"
 #include "EmuHost.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <sstream>
@@ -190,8 +191,9 @@ void BridgeServer::onEmuEvent(const void* evp)
     const uint64_t seq = nextSeq_++;
     for (auto& c : clients_) {
         if (c->events.size() >= 256) { c->events.pop_front(); ++c->dropped; }
-        c->events.push_back(QueuedEvent{ seq, uint8_t(ev.type), uint8_t(ev.cpu), ev.pc });
+        c->events.push_back(QueuedEvent{ seq, uint8_t(ev.type), uint8_t(ev.cpu), ev.pc, ev.bpId });
     }
+    eventCv_.notify_all();
 }
 
 std::string BridgeServer::handleEvents(Client& c, int max)
@@ -214,12 +216,53 @@ std::string BridgeServer::handleEvents(Client& c, int max)
         t << std::dec << e.seq << ","
           << (e.type < 4 ? kNames[e.type] : "?") << ","
           << std::hex << e.pc << ","
-          << (e.cpu ? "z80" : "m68k");
+          << (e.cpu ? "z80" : "m68k") << ","
+          << std::dec << e.bpId;
         tuples.push_back(t.str());
     }
 
     o << "ok " << std::dec << tuples.size();
     for (const auto& t : tuples) o << " " << t;
+    return o.str();
+}
+
+
+// Block until this client sees a stop, instead of making it spin on `events`.
+//
+// This is the primitive the whole agent loop is built on: set a breakpoint,
+// resume, and wait. Polling instead means either a busy loop or a latency that
+// makes "which frame did that happen on?" unanswerable.
+std::string BridgeServer::handleWait(Client& c, int timeoutMs)
+{
+    static const char* const kNames[] = { "started", "paused", "resumed", "stopped" };
+    std::unique_lock<std::mutex> lk(clientsMx_);
+
+    QueuedEvent hit{};
+    const bool got = eventCv_.wait_for(
+        lk, std::chrono::milliseconds(timeoutMs),
+        [&] {
+            while (!c.events.empty()) {
+                const QueuedEvent e = c.events.front();
+                c.events.pop_front();
+                // Only a stop ends a wait. Resumes and starts are still drained
+                // so they cannot make the next wait return instantly.
+                if (e.type == uint8_t(DebugEvent::Type::Paused) ||
+                    e.type == uint8_t(DebugEvent::Type::Stopped)) {
+                    hit = e;
+                    return true;
+                }
+            }
+            return stopFlag_.load();
+        });
+
+    if (!got || hit.seq == 0) return "ok timeout";
+
+    std::ostringstream o;
+    o << "ok " << (hit.type < 4 ? kNames[hit.type] : "?")
+      << " pc=" << std::hex << hit.pc
+      << " cpu=" << (hit.cpu ? "z80" : "m68k")
+      << " bp=" << std::dec << hit.bpId
+      << " seq=" << hit.seq;
     return o.str();
 }
 
@@ -324,6 +367,98 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         int max = (int)parseU32(arg(), 10);
         if (max <= 0 || max > 256) max = 64;
         return handleEvents(client, max);
+    }
+
+    // Block until the machine stops. Default 10s: long enough for a breakpoint
+    // deep in a level, short enough that a wedged emulator still answers.
+    if (cmd == "wait") {
+        int ms = (int)parseU32(arg(), 10);
+        if (ms <= 0) ms = 10000;
+        if (ms > 120000) ms = 120000;
+        return handleWait(client, ms);
+    }
+
+    // Run exactly n frames and stop. The only way to time an input: while the
+    // emulator is being debugged it is not bound to the wall clock.
+    if (cmd == "frameadv") {
+        int n = (int)parseU32(arg(), 10);
+        if (n <= 0) n = 1;
+        if (n > 100000) return "err too many frames";
+        host_->advanceFrames(n);
+        be->resume();
+        return "ok";
+    }
+
+    // Find a byte pattern in a region. Server-side because the alternative is
+    // hauling the whole region across as ASCII hex on every attempt.
+    if (cmd == "search") {
+        const int id = (int)parseU32(arg(), 10);
+        const auto pat = fromHex(arg());
+        int max = (int)parseU32(arg(), 10);
+        if (pat.empty()) return "err empty pattern";
+        if (max <= 0 || max > 4096) max = 256;
+
+        uint32_t size = 0;
+        for (const auto& r : be->getMemRegions()) if (r.id == id) size = r.size;
+        if (!size) return "err no such region";
+
+        const auto data = be->readRegion(id, 0, size);
+        std::ostringstream o;
+        o << "ok";
+        int found = 0;
+        for (size_t i = 0; i + pat.size() <= data.size() && found < max; ++i) {
+            if (std::memcmp(data.data() + i, pat.data(), pat.size()) == 0) {
+                o << " " << std::hex << (unsigned)i;
+                ++found;
+            }
+        }
+        return o.str();
+    }
+
+    // Snapshot a region for later comparison.
+    if (cmd == "snap") {
+        const int id = (int)parseU32(arg(), 10);
+        uint32_t size = 0;
+        for (const auto& r : be->getMemRegions()) if (r.id == id) size = r.size;
+        if (!size) return "err no such region";
+
+        auto data = be->readRegion(id, 0, size);
+        const size_t n = data.size();
+        {
+            std::lock_guard<std::mutex> lk(clientsMx_);
+            client.snaps[id] = std::move(data);
+        }
+        std::ostringstream o; o << "ok " << std::dec << n;
+        return o.str();
+    }
+
+    // What changed since `snap`. Returns offset:old:new triples — the RAM-search
+    // loop that finds a variable by playing the game and asking what moved.
+    if (cmd == "diff") {
+        const int id = (int)parseU32(arg(), 10);
+        int max = (int)parseU32(arg(), 10);
+        if (max <= 0 || max > 4096) max = 256;
+
+        std::vector<uint8_t> before;
+        {
+            std::lock_guard<std::mutex> lk(clientsMx_);
+            auto it = client.snaps.find(id);
+            if (it == client.snaps.end()) return "err no snapshot for that region";
+            before = it->second;
+        }
+        const auto now = be->readRegion(id, 0, (uint32_t)before.size());
+        std::ostringstream o;
+        o << "ok";
+        int found = 0;
+        const size_t n = now.size() < before.size() ? now.size() : before.size();
+        for (size_t i = 0; i < n && found < max; ++i) {
+            if (now[i] != before[i]) {
+                o << " " << std::hex << (unsigned)i << ":" << (unsigned)before[i]
+                  << ":" << (unsigned)now[i];
+                ++found;
+            }
+        }
+        return o.str();
     }
 
     // --- register writes -------------------------------------------------

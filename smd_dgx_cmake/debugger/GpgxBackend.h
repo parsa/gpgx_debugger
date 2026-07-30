@@ -77,11 +77,15 @@ public:
     // happening at all until the next loadRom.
     void abortRunControl();
 
+    // Which breakpoint caused the current stop, or -1 for a step, an explicit
+    // pause, or a stop that no breakpoint explains. Read after a pause event.
+    int lastStopBreakpoint() const { return lastBpId_.load(); }
+
 private:
-    void firePause(uint32_t pc, Cpu cpu = Cpu::M68K);
+    void firePause(uint32_t pc, Cpu cpu = Cpu::M68K, int bpId = -1);
     // width = bytes touched by the access, so a breakpoint inside a word or
     // longword access still matches.
-    bool matchBreakpoint(int type, uint32_t addr, int width = 1);
+    int  matchBreakpoint(int type, uint32_t addr, int width = 1);   // id, or -1
     void trackCall(uint32_t pc);          // maintain callstack_ from the opcode at pc
     uint16_t opcodeAt(uint32_t pc) const;
     void     onZ80Exec(uint32_t pc);
@@ -97,6 +101,7 @@ private:
     std::atomic<bool> running_  {false};
     std::atomic<bool> paused_   {false};
     std::atomic<bool> abandoned_{false};   // shutting down: never park again
+    std::atomic<int>  lastBpId_ {-1};      // reason for the current stop
     std::atomic<bool> stepInto_ {false};
     std::atomic<int>  stepOverAddr_ {-1};
     // The Z80 needs its own: it retires thousands of instructions per frame,
