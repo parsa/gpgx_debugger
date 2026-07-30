@@ -119,6 +119,21 @@ def _png(rgb565: bytes, w: int, h: int) -> bytes:
             + chunk(b"IEND", b""))
 
 
+def _hex(value: str) -> str:
+    """Normalise a hex address for the wire.
+
+    Not str.lstrip('0x'): that strips *characters*, so "0" and "0x0" both become
+    the empty string, the bridge sees one argument fewer than it expects, and
+    every later argument shifts by one. Address zero is not an exotic input —
+    it is the top of the 68000 vector table.
+    """
+    s = str(value).strip()
+    if s[:2].lower() == "0x":
+        s = s[2:]
+    s = s.lstrip("0")
+    return s or "0"
+
+
 # ---------------------------------------------------------------------------
 # state
 # ---------------------------------------------------------------------------
@@ -150,13 +165,13 @@ def get_vdp_state() -> dict[str, str]:
 @mcp.tool()
 def read_memory(address: str, size: int) -> str:
     """Read from the 68k bus. address is hex (e.g. 'FF0000'); returns hex bytes."""
-    return bridge.command(f"read {address.lstrip('0x')} {size}")
+    return bridge.command(f"read {_hex(address)} {size}")
 
 
 @mcp.tool()
 def write_memory(address: str, data_hex: str) -> str:
     """Write hex bytes to the 68k bus. address is hex."""
-    bridge.command(f"write {address.lstrip('0x')} {data_hex}")
+    bridge.command(f"write {_hex(address)} {data_hex}")
     return "written"
 
 
@@ -175,7 +190,7 @@ def list_regions() -> list[dict[str, str]]:
 @mcp.tool()
 def read_region(region_id: int, offset: str = "0", size: int = 256) -> str:
     """Read from a region by id (see list_regions). offset is hex; returns hex bytes."""
-    return bridge.command(f"readregion {region_id} {offset.lstrip('0x')} {size}")
+    return bridge.command(f"readregion {region_id} {_hex(offset)} {size}")
 
 
 # ---------------------------------------------------------------------------
@@ -205,18 +220,27 @@ def step(over: bool = False) -> str:
 @mcp.tool()
 def add_breakpoint(address: str, kind: str = "x", end: str | None = None) -> str:
     """Add a breakpoint. kind: 'x' execute, 'r' read, 'w' write. Addresses are hex."""
-    a = address.lstrip("0x")
-    return "breakpoint id " + bridge.command(f"bpadd {kind} {a} {(end or address).lstrip('0x')}")
+    a = _hex(address)
+    return "breakpoint id " + bridge.command(f"bpadd {kind} {a} {_hex(end or address)}")
 
 
 @mcp.tool()
 def list_breakpoints() -> list[dict[str, str]]:
-    """List breakpoints as id/kind/start/end."""
+    """List breakpoints: id, kind (x/r/w), start, end, cpu, vdp, enabled."""
     out = []
     for tok in bridge.command("bplist").split():
         p = tok.split(",")
-        if len(p) == 4:
-            out.append({"id": p[0], "kind": p[1], "start": p[2], "end": p[3]})
+        # The server sends seven fields; requiring exactly four made this
+        # return an empty list for every breakpoint that has ever existed.
+        # Accept four so an older host still works, and fill the rest in.
+        if len(p) < 4:
+            continue
+        out.append({
+            "id": p[0], "kind": p[1], "start": p[2], "end": p[3],
+            "cpu":     p[4] if len(p) > 4 else "m68k",
+            "vdp":     p[5] if len(p) > 5 else "0",
+            "enabled": p[6] if len(p) > 6 else "1",
+        })
     return out
 
 
