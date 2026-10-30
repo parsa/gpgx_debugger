@@ -87,7 +87,6 @@ struct dump_z80_ah_t : public action_handler_t {
     }
 };
 
-dump_z80_ah_t g_dump_z80_ah;
 const char kDumpAction[] = "smd_dgx:dump_z80";
 bool g_registered = false;
 
@@ -96,10 +95,15 @@ bool g_registered = false;
 void smd_dgx_register_z80_dump()
 {
     if (g_registered) return;
+    auto* handler = new dump_z80_ah_t;
     action_desc_t desc = ACTION_DESC_LITERAL_PLUGMOD(
-        kDumpAction, "Dump Z80 driver...", &g_dump_z80_ah, nullptr, nullptr,
+        kDumpAction, "Dump Z80 driver...", handler, nullptr, nullptr,
         "Write the running sound driver out of Z80 RAM", -1);
-    register_action(desc);
+    desc.flags |= ADF_OWN_HANDLER;
+    if (!register_action(desc)) {
+        delete handler;
+        return;
+    }
     attach_action_to_menu("Debugger/SMD patches/", kDumpAction, SETMENU_APP);
     g_registered = true;
 }

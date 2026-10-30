@@ -22,6 +22,8 @@ set_target_properties(smd_dgx_tests PROPERTIES
 )
 
 add_test(NAME smd_dgx_tests COMMAND smd_dgx_tests)
+add_test(NAME ida_platform_mac
+  COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_LIST_DIR}/test_ida_platform.cmake")
 # A hung run-control wait is the failure mode worth guarding: every wait in the
 # fixture has its own deadline, this is the backstop if one is ever forgotten.
 set_tests_properties(smd_dgx_tests PROPERTIES TIMEOUT 300)

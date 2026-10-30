@@ -99,6 +99,8 @@ extern void vdp_reset(void);
 extern int vdp_context_save(uint8 *state);
 extern int vdp_context_load(uint8 *state);
 extern void vdp_dma_update(unsigned int cycles);
+extern int vdp_dma_calc_src(void);
+extern int vdp_dma_get_dst(void);
 extern void vdp_68k_ctrl_w(unsigned int data);
 extern void vdp_z80_ctrl_w(unsigned int data);
 extern void vdp_sms_ctrl_w(unsigned int data);

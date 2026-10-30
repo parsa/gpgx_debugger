@@ -529,6 +529,85 @@ TEST(z80_ram_mirrors_through_3fff)
 }
 
 // ---------------------------------------------------------------------------
+// Active A7 aliases the selected stack bank. Sparse edits must not be undone
+// by restoring the unchanged bank fields from the same register snapshot.
+// ---------------------------------------------------------------------------
+TEST(m68k_stack_a7_write_updates_supervisor_bank)
+{
+    t::Emu e;
+    REQUIRE(e.start()); REQUIRE(e.pauseAndWait());
+    const auto before = e.backend()->getM68kRegs();
+    REQUIRE((before.sr & 0x2000) != 0);
+    auto edited = before;
+    edited.a[7] = 0xFF2200;
+    e.backend()->setM68kRegs(edited);
+    const auto after = e.backend()->getM68kRegs();
+    CHECK_EQ(after.a[7], edited.a[7]);
+    CHECK_EQ(after.isp, edited.a[7]);
+    CHECK_EQ(after.usp, before.usp);
+    CHECK_EQ(after.sr, before.sr);
+}
+
+TEST(m68k_stack_a7_write_updates_user_bank)
+{
+    t::Emu e;
+    REQUIRE(e.start()); REQUIRE(e.pauseAndWait());
+    auto setup = e.backend()->getM68kRegs();
+    setup.sr &= ~0x2000u;
+    setup.usp = 0xFF2300;
+    e.backend()->setM68kRegs(setup);
+    const auto before = e.backend()->getM68kRegs();
+    REQUIRE((before.sr & 0x2000) == 0);
+    auto edited = before;
+    edited.a[7] = 0xFF2400;
+    e.backend()->setM68kRegs(edited);
+    const auto after = e.backend()->getM68kRegs();
+    CHECK_EQ(after.a[7], edited.a[7]);
+    CHECK_EQ(after.usp, edited.a[7]);
+    CHECK_EQ(after.isp, before.isp);
+    CHECK_EQ(after.sr, before.sr);
+}
+
+TEST(m68k_stack_sr_switch_selects_saved_bank)
+{
+    t::Emu e;
+    REQUIRE(e.start()); REQUIRE(e.pauseAndWait());
+    auto setup = e.backend()->getM68kRegs();
+    const auto supervisor_sp = setup.a[7];
+    setup.usp = 0xFF2500;
+    e.backend()->setM68kRegs(setup);
+    auto edited = e.backend()->getM68kRegs();
+    edited.sr &= ~0x2000u;
+    e.backend()->setM68kRegs(edited);
+    const auto user = e.backend()->getM68kRegs();
+    CHECK_EQ(user.a[7], setup.usp);
+    CHECK_EQ(user.isp, supervisor_sp);
+    edited = user;
+    edited.sr |= 0x2000;
+    e.backend()->setM68kRegs(edited);
+    const auto supervisor = e.backend()->getM68kRegs();
+    CHECK_EQ(supervisor.a[7], supervisor_sp);
+    CHECK_EQ(supervisor.usp, setup.usp);
+}
+
+TEST(m68k_stack_bank_only_writes_still_update_active_sp)
+{
+    t::Emu e;
+    REQUIRE(e.start()); REQUIRE(e.pauseAndWait());
+    auto edited = e.backend()->getM68kRegs();
+    edited.isp = 0xFF2600;
+    e.backend()->setM68kRegs(edited);
+    CHECK_EQ(e.backend()->getM68kRegs().a[7], edited.isp);
+    edited = e.backend()->getM68kRegs();
+    edited.sr &= ~0x2000u;
+    e.backend()->setM68kRegs(edited);
+    edited = e.backend()->getM68kRegs();
+    edited.usp = 0xFF2700;
+    e.backend()->setM68kRegs(edited);
+    CHECK_EQ(e.backend()->getM68kRegs().a[7], edited.usp);
+}
+
+// ---------------------------------------------------------------------------
 // Save states
 // ---------------------------------------------------------------------------
 TEST(save_state_restores_memory_and_registers)
@@ -548,7 +627,8 @@ TEST(save_state_restores_memory_and_registers)
     const std::string path = std::string(std::getenv("TEMP") ? std::getenv("TEMP") : ".")
                              + "\\smd_dgx_test.gpz";
 #else
-    const std::string path = "/tmp/smd_dgx_test.gpz";
+    const std::string path = std::string(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : ".")
+                             + "/smd_dgx_test.gpz";
 #endif
     bool saved = false;
     e.backend()->runSafely([&] { saved = e.backend()->saveState(path.c_str()); });

@@ -140,7 +140,12 @@ void smd_dgx_register_patches()
         g_handlers[i] = new patch_ah_t(i);
         action_desc_t desc = ACTION_DESC_LITERAL_PLUGMOD(
             kNames[i], kLabels[i], g_handlers[i], nullptr, kKeys[i], nullptr, -1);
-        register_action(desc);
+        desc.flags |= ADF_OWN_HANDLER;
+        if (!register_action(desc)) {
+            delete g_handlers[i];
+            g_handlers[i] = nullptr;
+            continue;
+        }
         attach_action_to_menu("Debugger/SMD patches/", kNames[i], SETMENU_APP);
     }
 }
@@ -148,8 +153,7 @@ void smd_dgx_register_patches()
 void smd_dgx_unregister_patches()
 {
     for (int i = 0; i < 3; ++i) {
-        unregister_action(kNames[i]);
-        delete g_handlers[i];
+        if (g_handlers[i]) unregister_action(kNames[i]);
         g_handlers[i] = nullptr;
     }
 }

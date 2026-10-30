@@ -19,7 +19,7 @@ add_library(smd_dgx_ldr SHARED
 )
 target_include_directories(smd_dgx_ldr PRIVATE "${IDA_SDK_DIR}/include")
 target_compile_definitions(smd_dgx_ldr PRIVATE
-  ${IDA_PLATFORM_DEF} __X64__ __EA64__
+  ${IDA_PLATFORM_DEF} ${IDA_PROCESSOR_DEF} __EA64__
   NO_OBSOLETE_FUNCS
 )
 target_link_libraries(smd_dgx_ldr PRIVATE "${IDA_LIB}")
@@ -50,7 +50,7 @@ add_library(smd_dgx_z80_ldr SHARED
 )
 target_include_directories(smd_dgx_z80_ldr PRIVATE "${IDA_SDK_DIR}/include")
 target_compile_definitions(smd_dgx_z80_ldr PRIVATE
-  ${IDA_PLATFORM_DEF} __X64__ __EA64__
+  ${IDA_PLATFORM_DEF} ${IDA_PROCESSOR_DEF} __EA64__
   NO_OBSOLETE_FUNCS
 )
 target_link_libraries(smd_dgx_z80_ldr PRIVATE "${IDA_LIB}")

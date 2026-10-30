@@ -298,8 +298,13 @@ void smd_dgx_register_asm()
     g_handler = new annotate_ah_t;
     action_desc_t desc = ACTION_DESC_LITERAL_PLUGMOD(
         kName, "Identify SMD constant", g_handler, nullptr, "J", nullptr, -1);
-    register_action(desc);
-    attach_action_to_menu("Edit/Other/", kName, SETMENU_APP);
+    desc.flags |= ADF_OWN_HANDLER;
+    if (register_action(desc)) {
+        attach_action_to_menu("Edit/Other/", kName, SETMENU_APP);
+    } else {
+        delete g_handler;
+        g_handler = nullptr;
+    }
 
     hook_event_listener(HT_IDP, &g_idp, nullptr);
 }
@@ -308,7 +313,6 @@ void smd_dgx_unregister_asm()
 {
     unhook_event_listener(HT_IDP, &g_idp);
 
-    unregister_action(kName);
-    delete g_handler;
+    if (g_handler) unregister_action(kName);
     g_handler = nullptr;
 }

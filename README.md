@@ -62,8 +62,8 @@ Open a Mega Drive ROM, choose **SMD DGX** as the debugger, `F9`. The emulator
 runs inside IDA, so IDA's own windows operate on the live machine:
 
 - **Registers** — 68000 (named SR flags, plus DMA length/source and the address
-  the next VDP write will land at) and a separate VDP register class. Editable,
-  except PC.
+  the next VDP write will land at) and a separate VDP register class. PC is
+  writable while paused, including through headless IDAPython.
 - **Memory** — ROM, work RAM, Z80 RAM, and the VDP memories as pseudo-segments
   at `$D00000` (VRAM), `$D10000` (CRAM), `$D20000` (VSRAM). Reads are
   side-effect free; they never touch an IO handler.

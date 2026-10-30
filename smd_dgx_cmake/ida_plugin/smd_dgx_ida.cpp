@@ -10,6 +10,8 @@
 // Marked VERIFY-9.3 where the API must be checked against the 9.3 SDK once it
 // is installed (written against the 9.x idd.hpp surface Gensida used).
 
+#include <atomic>
+#include <memory>
 #include <deque>
 #include <map>
 #include <mutex>
@@ -103,14 +105,22 @@ uint32_t g_romSize = 0;
 // ---------------------------------------------------------------------------
 // codemap -> auto_make_code on the main thread
 // ---------------------------------------------------------------------------
+std::map<int, std::shared_ptr<std::atomic<bool>>> g_codemap_requests;
+std::mutex g_codemap_mutex;
+
 struct apply_codemap_req : public exec_request_t {
+    std::shared_ptr<std::atomic<bool>> completed;
     std::map<uint32_t, uint32_t> changed;
-    explicit apply_codemap_req(std::map<uint32_t, uint32_t> c) : changed(std::move(c)) {}
+    apply_codemap_req(std::map<uint32_t, uint32_t> c, std::shared_ptr<std::atomic<bool>> done)
+        : completed(std::move(done)), changed(std::move(c)) {}
     ssize_t idaapi execute() override {
         for (const auto& kv : changed) {
             auto_make_code((ea_t)kv.first);
             plan_ea((ea_t)kv.first);
         }
+        completed->store(true);
+        // As in the SDK IDAPython wrapper, NOWAIT requests self-destruct.
+        delete this;
         return 0;
     }
 };
@@ -118,8 +128,31 @@ struct apply_codemap_req : public exec_request_t {
 void apply_codemap(std::map<uint32_t, uint32_t> changed)
 {
     if (changed.empty()) return;
-    apply_codemap_req req(std::move(changed));
-    execute_sync(req, MFF_WRITE);
+    // IDA may be waiting for our pause/exit event. Never wait for its UI here.
+    // MFF_WRITE preserves database write safety; NOWAIT avoids the wait cycle.
+    std::lock_guard<std::mutex> lock(g_codemap_mutex);
+    for (auto it = g_codemap_requests.begin(); it != g_codemap_requests.end();)
+        if (it->second->load()) it = g_codemap_requests.erase(it);
+        else ++it;
+    auto completed = std::make_shared<std::atomic<bool>>(false);
+    auto* req = new apply_codemap_req(std::move(changed), completed);
+    int id = int(execute_sync(*req, MFF_WRITE | MFF_NOWAIT));
+    if (!completed->load()) {
+        if (id >= 0) g_codemap_requests.emplace(id, completed);
+        else delete req;
+    }
+}
+
+void cancel_codemap_requests()
+{
+    std::map<int, std::shared_ptr<std::atomic<bool>>> pending;
+    {
+        std::lock_guard<std::mutex> lock(g_codemap_mutex);
+        pending.swap(g_codemap_requests);
+    }
+    for (const auto& entry : pending)
+        // IDA destroys successfully cancelled requests (verified on 9.4).
+        if (!entry.second->load()) cancel_exec_request(entry.first);
 }
 
 // ---------------------------------------------------------------------------
@@ -403,7 +436,7 @@ register_info_t registers[] = {
     { "A7", 0, RC_GENERAL, dt_dword, nullptr, 0 },
     { "A7_ADDR", REGISTER_ADDRESS | REGISTER_READONLY, RC_GENERAL, dt_dword, nullptr, 0 },
 
-    { "PC", REGISTER_ADDRESS | REGISTER_IP | REGISTER_READONLY, RC_GENERAL, dt_dword, nullptr, 0 },
+    { "PC", REGISTER_ADDRESS | REGISTER_IP, RC_GENERAL, dt_dword, nullptr, 0 },
     { "SP", REGISTER_ADDRESS | REGISTER_SP, RC_GENERAL, dt_dword, nullptr, 0 },
     { "SR", 0, RC_GENERAL, dt_word, SRReg, 0xFFFF },
 
@@ -481,6 +514,21 @@ drc_t read_registers(int clsmask, regval_t* values)
     return DRC_OK;
 }
 
+bool refresh_register_cache()
+{
+    struct cache_req_t : exec_request_t {
+        ssize_t idaapi execute() override {
+            invalidate_dbg_state(DBGINV_REGS);
+            return 0;
+        }
+    } req;
+    // Register callbacks may run in debthread. This UI-cache operation does
+    // not query/modify the database: FAST can run while IDA waits for the
+    // callback, unlike READ/WRITE requests which can wait for database idle.
+    // Wait for completion so a subsequent get_reg_val sees current aliases.
+    return execute_sync(req, MFF_FAST) == 0;
+}
+
 drc_t write_register(int regidx, const regval_t* value)
 {
     if (!g_host) return DRC_FAILED;
@@ -491,15 +539,18 @@ drc_t write_register(int regidx, const regval_t* value)
         if (regidx <= R_D7)          r.d[regidx - R_D0] = (uint32_t)value->ival;
         else if (regidx < R_PC && ((regidx - R_A0) % 2) == 0)
                                      r.a[(regidx - R_A0) / 2] = (uint32_t)value->ival;
+        else if (regidx == R_PC)     r.pc = (uint32_t)value->ival & 0xFFFFFF;
         else if (regidx == R_SP)     r.a[7] = (uint32_t)value->ival;
         else if (regidx == R_SR)     r.sr = (uint32_t)value->ival;
-        else return DRC_OK;          // PC/ADDR pseudo-regs are read-only
+        else return DRC_OK;          // ADDR pseudo-regs are read-only
         be->setM68kRegs(r);
-        return DRC_OK;
+        // A7/SP, SR-selected banks and address views share underlying values.
+        // Do not leave the other names in IDA's cache at their pre-write values.
+        return refresh_register_cache() ? DRC_OK : DRC_FAILED;
     }
     if (regidx >= R_V00 && regidx <= R_V23) {
         be->setVdpReg(regidx - R_V00, (uint8_t)(value->ival & 0xFF));
-        return DRC_OK;
+        return refresh_register_cache() ? DRC_OK : DRC_FAILED;
     }
     return DRC_OK;
 }
@@ -943,7 +994,7 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
         hook_event_listener(HT_IDD, this);
         dbg = &debugger;
 #ifdef SMD_DGX_IDA_VIEWS
-        smd_dgx_register_views();
+        if (is_idaq()) smd_dgx_register_views();
 #endif
         smd_dgx_register_patches();
         smd_dgx_register_asm();
@@ -954,13 +1005,14 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
     ~smd_dgx_plugmod_t() override
     {
 #ifdef SMD_DGX_IDA_VIEWS
-        smd_dgx_unregister_views();
+        if (is_idaq()) smd_dgx_unregister_views();
 #endif
         smd_dgx_unregister_patches();
         smd_dgx_unregister_asm();
         smd_dgx_unregister_z80_actions();
         delete g_bridge; g_bridge = nullptr;
         if (g_host) { g_host->stop(); delete g_host; g_host = nullptr; }
+        cancel_codemap_requests();
         stop_audio();
         if (dbg == &debugger)
             dbg = nullptr;

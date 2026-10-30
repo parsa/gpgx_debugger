@@ -45,7 +45,7 @@ target_include_directories(smd_dgx_ida PRIVATE
   "${CMAKE_CURRENT_LIST_DIR}/.."       # debugger/EmuHost.h etc.
 )
 target_compile_definitions(smd_dgx_ida PRIVATE
-  ${IDA_PLATFORM_DEF} __X64__ __EA64__
+  ${IDA_PLATFORM_DEF} ${IDA_PROCESSOR_DEF} __EA64__
   NO_OBSOLETE_FUNCS
 )
 target_link_libraries(smd_dgx_ida PRIVATE smd_dgx_emu gx_audio "${IDA_LIB}")
@@ -66,12 +66,10 @@ set_target_properties(smd_dgx_ida PROPERTIES
 #   - headers + moc come from the regular Qt install (same 6.8.2), and
 #   - QT_NAMESPACE=QT makes them declare everything in namespace QT, and
 #   - we link the import libs the SDK ships for IDA's own Qt (lib/*_qt).
-# At runtime the plugin uses the Qt libraries IDA has already loaded — never
-# deploy Qt next to the plugin.
-#
-# On Linux and macOS there are no import libraries: the loader resolves Qt
-# symbols against what the IDA process has already mapped, so nothing is linked
-# and the views build from headers alone.
+# Never deploy a second Qt next to the plugin. On macOS explicitly link IDA's
+# own frameworks: GUI IDA preloads them, but headless idat/idalib does not.
+# Resolving against only preloaded symbols made the plugin unloadable in idat.
+# On Linux the loader still resolves symbols against the host's Qt.
 if (WIN32)
   find_library(IDA_QT_CORE    Qt6Core    HINTS ${IDA_QT_LIB_DIR} NO_DEFAULT_PATH)
   find_library(IDA_QT_GUI     Qt6Gui     HINTS ${IDA_QT_LIB_DIR} NO_DEFAULT_PATH)
@@ -80,6 +78,21 @@ if (WIN32)
   if (NOT IDA_QT_GUI OR NOT IDA_QT_WIDGETS)
     set(IDA_QT_READY OFF)
   endif()
+elseif (APPLE)
+  get_filename_component(_ida_macos_dir "${IDA_LIB}" DIRECTORY)
+  get_filename_component(_ida_qt_default "${_ida_macos_dir}/../Frameworks" ABSOLUTE)
+  set(IDA_QT_FRAMEWORK_DIR "${_ida_qt_default}" CACHE PATH
+    "IDA's bundled Qt framework directory (macOS)")
+  foreach(_qt_component Core Gui Widgets)
+    string(TOUPPER "${_qt_component}" _qt_upper)
+    set(IDA_QT_${_qt_upper} "${IDA_QT_FRAMEWORK_DIR}/Qt${_qt_component}.framework")
+  endforeach()
+  set(IDA_QT_READY ON)
+  foreach(_qt_framework "${IDA_QT_CORE}" "${IDA_QT_GUI}" "${IDA_QT_WIDGETS}")
+    if (NOT EXISTS "${_qt_framework}")
+      message(FATAL_ERROR "IDA's Qt framework not found: ${_qt_framework}; set IDA_QT_FRAMEWORK_DIR to IDA.app/Contents/Frameworks")
+    endif()
+  endforeach()
 else()
   set(IDA_QT_CORE "")
   set(IDA_QT_GUI "")
@@ -126,14 +139,14 @@ if (Qt6_FOUND AND IDA_QT_READY)
   if (MSVC)
     target_compile_options(smd_dgx_ida PRIVATE /Zc:__cplusplus /permissive-)
   endif()
-  if (WIN32)
+  if (WIN32 OR APPLE)
     target_link_libraries(smd_dgx_ida PRIVATE
       "${IDA_QT_WIDGETS}" "${IDA_QT_GUI}" "${IDA_QT_CORE}")
-  else()
-    # Resolve Qt against whatever IDA has already loaded, rather than failing
-    # the link over symbols that will exist at load time.
     if (APPLE)
-      target_link_options(smd_dgx_ida PRIVATE "-Wl,-undefined,dynamic_lookup")
+      set_property(TARGET smd_dgx_ida APPEND PROPERTY BUILD_RPATH
+        "@loader_path/../../Frameworks" "${IDA_QT_FRAMEWORK_DIR}")
+      set_property(TARGET smd_dgx_ida APPEND PROPERTY INSTALL_RPATH
+        "@loader_path/../../Frameworks")
     endif()
   endif()
   set_target_properties(smd_dgx_ida PROPERTIES AUTOMOC ON)

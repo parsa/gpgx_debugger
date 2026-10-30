@@ -79,12 +79,22 @@ M68kRegs GpgxBackend::getM68kRegs()
 
 void GpgxBackend::setM68kRegs(const M68kRegs& r)
 {
+    // Snapshots expose active A7 and its USP/ISP alias. If A7 was edited,
+    // update the selected bank too, instead of restoring its stale snapshot.
+    // An SR-only edit must still select the saved bank, and explicit bank-only
+    // edits must keep working when A7 itself is unchanged.
+    uint32_t usp = r.usp;
+    uint32_t isp = r.isp;
+    if (r.a[7] != m68k_get_reg(M68K_REG_A7)) {
+        if (r.sr & 0x2000) isp = r.a[7];
+        else usp = r.a[7];
+    }
     for (int i = 0; i < 8; ++i) m68k_set_reg(static_cast<m68k_register_t>(M68K_REG_D0 + i), r.d[i]);
     for (int i = 0; i < 8; ++i) m68k_set_reg(static_cast<m68k_register_t>(M68K_REG_A0 + i), r.a[i]);
     m68k_set_reg(M68K_REG_PC,  r.pc);
     m68k_set_reg(M68K_REG_SR,  r.sr);
-    m68k_set_reg(M68K_REG_USP, r.usp);
-    m68k_set_reg(M68K_REG_ISP, r.isp);
+    m68k_set_reg(M68K_REG_USP, usp);
+    m68k_set_reg(M68K_REG_ISP, isp);
 }
 
 Z80Regs GpgxBackend::getZ80Regs()

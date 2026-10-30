@@ -7,6 +7,7 @@
 #include <unistd.h>
 #endif
 
+#include <string.h>
 #include "debug_wrap.h"
 
 #ifdef _WIN32
@@ -35,7 +36,7 @@ dbg_request_t* create_shared_mem()
         return NULL;
     }
 #else
-    request = shm_open(SHARED_MEM_NAME, O_CREAT | O_RDWR, 0777);
+    shm = shm_open(SHARED_MEM_NAME, O_CREAT | O_RDWR, 0777);
 
     if (shm == -1)
         return NULL;

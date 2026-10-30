@@ -33,4 +33,14 @@ __pycache__/
 
 # Game-specific reverse-engineering scripts live with the investigation, not
 # with the debugger.
-smd_dgx_cmake/tools/
+smd_dgx_cmake/tools/*
+!smd_dgx_cmake/tools/package_macos.py
+
+# Local setup, agent state, ROMs and generated distributions are not source.
+/.setup/
+/.pi/
+/.superlite/
+/disk/
+/dist/*
+!/dist/README.md
+.DS_Store

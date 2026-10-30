@@ -170,7 +170,8 @@ public:
         const char* tmp = std::getenv("TEMP");
         path_ = std::string(tmp ? tmp : ".") + "\\smd_dgx_test_rom.bin";
 #else
-        path_ = "/tmp/smd_dgx_test_rom.bin";
+        const char* tmp = std::getenv("TMPDIR");
+        path_ = std::string(tmp ? tmp : ".") + "/smd_dgx_test_rom.bin";
 #endif
         if (FILE* f = std::fopen(path_.c_str(), "wb")) {
             std::fwrite(rom.data(), 1, rom.size(), f);

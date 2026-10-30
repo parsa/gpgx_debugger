@@ -6,7 +6,14 @@
 # platform define. An extension-less module is the worst kind of build error —
 # it links fine and IDA silently ignores it.
 #
-# Sets: IDA_LIB_HINTS, IDA_PLATFORM_DEF, IDA_MODULE_SUFFIX, IDA_QT_LIB_DIR
+# Sets: IDA_LIB_HINTS, IDA_PLATFORM_DEF, IDA_PROCESSOR_DEF,
+#       IDA_MODULE_SUFFIX, IDA_QT_LIB_DIR
+
+set(IDA_PROCESSOR_DEF __X64__)
+if (APPLE AND (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR
+    (NOT CMAKE_OSX_ARCHITECTURES AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")))
+  set(IDA_PROCESSOR_DEF __ARM__)
+endif()
 
 if (WIN32)
   set(IDA_LIB_HINTS "${IDA_SDK_DIR}/lib/x64_win_vc_64"        # licensed SDK layout

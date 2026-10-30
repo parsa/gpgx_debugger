@@ -192,13 +192,18 @@ char g_preset_names[kPresetCount][32];
 char g_slot_names[kSlotCount][32];
 char g_slot_labels[kSlotCount][16];
 
-void add_action(const char* name, const char* label, action_handler_t* h,
+bool add_action(const char* name, const char* label, action_handler_t* h,
                 const char* menu, const char* shortcut = nullptr)
 {
-    action_desc_t desc = ACTION_DESC_LITERAL_PLUGMOD(      // VERIFY-9.3
+    action_desc_t desc = ACTION_DESC_LITERAL_PLUGMOD(
         name, label, h, nullptr, shortcut, nullptr, -1);
-    register_action(desc);
+    desc.flags |= ADF_OWN_HANDLER;
+    if (!register_action(desc)) {
+        delete h; // Ownership transfers only on successful registration.
+        return false;
+    }
     attach_action_to_menu(menu, name, SETMENU_APP);
+    return true;
 }
 
 } // namespace
@@ -219,30 +224,35 @@ void smd_dgx_register_views()
     for (int i = 0; i < SMD_DGX_VIEW_COUNT; ++i) {
         qsnprintf(g_view_names[i], sizeof(g_view_names[i]), "smd_dgx:view%d", i);
         g_view_handlers[i] = new open_view_ah_t(i);
-        add_action(g_view_names[i], smd_dgx_view_titles[i], g_view_handlers[i],
-                   "Debugger/Debugger windows/");
+        if (!add_action(g_view_names[i], smd_dgx_view_titles[i], g_view_handlers[i],
+                        "Debugger/Debugger windows/"))
+            g_view_handlers[i] = nullptr;
     }
 
     for (int i = 0; i < kPresetCount; ++i) {
         qsnprintf(g_preset_names[i], sizeof(g_preset_names[i]), "smd_dgx:preset%d", i);
         g_preset_handlers[i] = new preset_ah_t(i);
-        add_action(g_preset_names[i], kPresets[i].name, g_preset_handlers[i],
-                   "Debugger/SMD layouts/");
+        if (!add_action(g_preset_names[i], kPresets[i].name, g_preset_handlers[i],
+                        "Debugger/SMD layouts/"))
+            g_preset_handlers[i] = nullptr;
     }
 
     g_save_handler = new state_ah_t(true);
     g_load_handler = new state_ah_t(false);
-    add_action("smd_dgx:savestate", "Save state", g_save_handler,
-               "Debugger/SMD save states/", "Ctrl-Alt-S");
-    add_action("smd_dgx:loadstate", "Load state", g_load_handler,
-               "Debugger/SMD save states/", "Ctrl-Alt-L");
+    if (!add_action("smd_dgx:savestate", "Save state", g_save_handler,
+                    "Debugger/SMD save states/", "Ctrl-Alt-S"))
+        g_save_handler = nullptr;
+    if (!add_action("smd_dgx:loadstate", "Load state", g_load_handler,
+                    "Debugger/SMD save states/", "Ctrl-Alt-L"))
+        g_load_handler = nullptr;
 
     for (int i = 0; i < kSlotCount; ++i) {
         qsnprintf(g_slot_names[i], sizeof(g_slot_names[i]), "smd_dgx:slot%d", i);
         qsnprintf(g_slot_labels[i], sizeof(g_slot_labels[i]), "Slot %d", i);
         g_slot_handlers[i] = new slot_ah_t(i);
-        add_action(g_slot_names[i], g_slot_labels[i], g_slot_handlers[i],
-                   "Debugger/SMD save states/Select slot/");
+        if (!add_action(g_slot_names[i], g_slot_labels[i], g_slot_handlers[i],
+                        "Debugger/SMD save states/Select slot/"))
+            g_slot_handlers[i] = nullptr;
     }
 }
 
@@ -251,22 +261,19 @@ void smd_dgx_unregister_views()
     smd_dgx_view_detach_all();
 
     for (int i = 0; i < SMD_DGX_VIEW_COUNT; ++i) {
-        unregister_action(g_view_names[i]);
-        delete g_view_handlers[i];
+        if (g_view_handlers[i]) unregister_action(g_view_names[i]);
         g_view_handlers[i] = nullptr;
     }
     for (int i = 0; i < kPresetCount; ++i) {
-        unregister_action(g_preset_names[i]);
-        delete g_preset_handlers[i];
+        if (g_preset_handlers[i]) unregister_action(g_preset_names[i]);
         g_preset_handlers[i] = nullptr;
     }
     for (int i = 0; i < kSlotCount; ++i) {
-        unregister_action(g_slot_names[i]);
-        delete g_slot_handlers[i];
+        if (g_slot_handlers[i]) unregister_action(g_slot_names[i]);
         g_slot_handlers[i] = nullptr;
     }
-    unregister_action("smd_dgx:savestate");
-    unregister_action("smd_dgx:loadstate");
-    delete g_save_handler; g_save_handler = nullptr;
-    delete g_load_handler; g_load_handler = nullptr;
+    if (g_save_handler) unregister_action("smd_dgx:savestate");
+    if (g_load_handler) unregister_action("smd_dgx:loadstate");
+    g_save_handler = nullptr;
+    g_load_handler = nullptr;
 }
