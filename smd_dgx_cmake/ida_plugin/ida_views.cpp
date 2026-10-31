@@ -2,7 +2,7 @@
 // ONLY — NO IDA headers (see ida_views_shared.h). The IDA TWidget arrives as a
 // void* that is really a QWidget* in IDA's stock-Qt build.
 //
-// IDA 9.2+ ships the same Qt 6.8.2 our views target, so the widgets are used
+// Build against the Qt version IDA ships (6.8.2 in 9.2-9.4, 6.12 in 9.5), so the widgets are used
 // as-is and run on the Qt DLLs IDA has already loaded.
 
 #include <QWidget>

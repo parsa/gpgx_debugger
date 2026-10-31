@@ -734,15 +734,8 @@ void md_cart_init(void)
     /* KAISER WAVE board !TIME handler */
     cart.hw.time_w = mapper_kaiserwave_w;
 
-    /* enable YX5200 hardware */
-    cart.special |= HW_YX5200;
-
-    /* allocate & clear blip buffer for YX5200 audio stream */
-    snd.blips[3] = blip_new(snd.sample_rate / 10);
-    if (snd.blips[3]) blip_clear(snd.blips[3]);
-
-    /* initialize YX5200 audio */
-    yx5200_init(snd.sample_rate);
+    /* This fork excludes YX5200 audio, as on the older KAISER WAVE board.
+       Keep the new board mapping without enabling unavailable hardware. */
 
     /* 64M extension mapping (upper 4MB of flash memory is apparently unused but still accessible as cartridge board uses same signals as described in https://gitlab.com/doragasu/flatmap64) */
     for (i=0x40; i<0x80; i++)

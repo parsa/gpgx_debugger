@@ -1,6 +1,6 @@
-# Headless IDA debugging (macOS IDA 9.4)
+# Headless IDA debugging (macOS IDA 9.5)
 
-The installed `smd_dgx_ida.dylib` now supports **headless `idat`** as well as GUI IDA. This was verified on native arm64 IDA 9.4. Separate `idalib` embedding and other operating systems are not covered by these runtime tests.
+The installed `smd_dgx_ida.dylib` now supports **headless `idat`** as well as GUI IDA. This was verified on native arm64 IDA Pro 9.5, built against the 9.5 SDK and linked to IDA 9.5's namespaced Qt 6.12 frameworks. Separate `idalib` embedding and other operating systems are not covered by these runtime tests.
 
 ## Restart the existing headless worker
 
@@ -29,7 +29,7 @@ rc = ida_dbg.start_process("/absolute/path/to/Pocahontas.md", "", "/working/dire
 print(rc)  # 1 means started; 0 means cancelled; -1 means creation failed
 ```
 
-The plugin currently prefers the **database input path**, if nonempty, over the executable argument. That input must therefore point to an existing complete game ROM (`.bin` is fine too), not a missing file or extracted fragment. Passing another executable path alone does not override it. Inspect it before changing anything in a valuable database. The IDAPython setter in IDA 9.4 is `ida_nalt.set_root_filename(full_rom_path)` (not `set_input_file_path`). Existing labels, functions, and loader-created segment metadata do not determine whether the emulator can load the ROM.
+The plugin currently prefers the **database input path**, if nonempty, over the executable argument. That input must therefore point to an existing complete game ROM (`.bin` is fine too), not a missing file or extracted fragment. Passing another executable path alone does not override it. Inspect it before changing anything in a valuable database. The IDAPython setter in IDA 9.5 is `ida_nalt.set_root_filename(full_rom_path)` (not `set_input_file_path`). Existing labels, functions, and loader-created segment metadata do not determine whether the emulator can load the ROM.
 
 IDA's startup includes PROCESS_STARTED and PROCESS_SUSPENDED events. Drain startup events before stepping; the smoke test demonstrates this. Native `ida_dbg` calls for register/memory reads, single stepping, execute breakpoints, resume, pause, and exit work without a GUI or special ROM configuration file. Timeout parameters to `wait_for_next_event` are **seconds**.
 
@@ -107,4 +107,4 @@ uv run --no-project --python /opt/homebrew/bin/python3.11 python .setup/run_head
 uv run --no-project --python /opt/homebrew/bin/python3.11 python .setup/run_headless_smoke.py raw
 ```
 
-The plugin was rebuilt and installed at `/Applications/IDA Professional 9.4.app/Contents/MacOS/plugins/smd_dgx_ida.dylib`.
+The plugin was rebuilt and installed at `/Applications/IDA Professional 9.5.app/Contents/MacOS/plugins/smd_dgx_ida.dylib`.

@@ -163,9 +163,8 @@ inline std::vector<uint8_t> buildZ80()
 // takes a path, so a real file is unavoidable; leaking them is not.
 class RomFile {
 public:
-    RomFile()
+    explicit RomFile(const std::vector<uint8_t>& rom = buildRom())
     {
-        const auto rom = buildRom();
 #ifdef _WIN32
         const char* tmp = std::getenv("TEMP");
         path_ = std::string(tmp ? tmp : ".") + "\\smd_dgx_test_rom.bin";

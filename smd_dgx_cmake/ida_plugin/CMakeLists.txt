@@ -59,11 +59,11 @@ set_target_properties(smd_dgx_ida PROPERTIES
 
 # Views embedding (phase 3).
 #
-# IDA ships Qt 6.8.2, but built inside a namespace: its exports are
+# IDA ships Qt (6.8.2 through 9.4, 6.12 in 9.5), but built inside a namespace: its exports are
 # ??0QString@QT@@... , not ??0QString@@... . Linking the stock Qt import libs
 # produces a DLL whose every Qt import is unresolvable at load time ("The
 # specified procedure could not be found"). So:
-#   - headers + moc come from the regular Qt install (same 6.8.2), and
+#   - headers + moc come from the regular Qt install of the same version, and
 #   - QT_NAMESPACE=QT makes them declare everything in namespace QT, and
 #   - we link the import libs the SDK ships for IDA's own Qt (lib/*_qt).
 # Never deploy a second Qt next to the plugin. On macOS explicitly link IDA's
@@ -138,6 +138,12 @@ if (Qt6_FOUND AND IDA_QT_READY)
   # Normally supplied by the Qt6:: targets, which we no longer link.
   if (MSVC)
     target_compile_options(smd_dgx_ida PRIVATE /Zc:__cplusplus /permissive-)
+  endif()
+  if (APPLE AND IDA_PROCESSOR_DEF STREQUAL "__ARM__" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # Qt 6.8's __yield builtin path needs its ARM declaration before entering
+    # namespace QT. moc sources include Qt before the SDK, unlike ordinary
+    # module sources: do not depend on a hidden global CMAKE_CXX_FLAGS include.
+    target_compile_options(smd_dgx_ida PRIVATE -include arm_acle.h)
   endif()
   if (WIN32 OR APPLE)
     target_link_libraries(smd_dgx_ida PRIVATE

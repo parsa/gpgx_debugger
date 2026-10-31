@@ -228,22 +228,37 @@ int EmuHost::addEventSink(EventSink s)
     if (!s) return -1;
     std::lock_guard<std::mutex> lk(sinkMx_);
     const int id = nextSinkId_++;
-    eventSinks_.push_back({ id, std::move(s) });
+    eventSinks_.push_back(std::make_shared<Sink>(id, std::move(s)));
     return id;
 }
 
 void EmuHost::removeEventSink(int id)
 {
     if (id < 0) return;
-    std::lock_guard<std::mutex> lk(sinkMx_);
-    for (size_t i = 0; i < eventSinks_.size(); ++i)
-        if (eventSinks_[i].id == id) { eventSinks_.erase(eventSinks_.begin() + i); return; }
+    std::shared_ptr<Sink> sink;
+    {
+        std::lock_guard<std::mutex> lk(sinkMx_);
+        for (auto it = eventSinks_.begin(); it != eventSinks_.end(); ++it) {
+            if ((*it)->id != id) continue;
+            sink = *it;
+            eventSinks_.erase(it);
+            break;
+        }
+    }
+    if (!sink) return;
+    // Never hold the subscription-list lock while draining an invocation:
+    // callbacks may themselves unsubscribe. Copied dispatches share this gate.
+    std::lock_guard<std::recursive_mutex> lock(sink->mx);
+    sink->enabled = false;
 }
 
 void EmuHost::emitEvent(const DebugEvent& ev)
 {
     if (transport_) transport_->sendEvent(ev);
-    std::vector<Sink> sinks;
+    std::vector<std::shared_ptr<Sink>> sinks;
     { std::lock_guard<std::mutex> lk(sinkMx_); sinks = eventSinks_; }
-    for (const auto& s : sinks) s.fn(ev);   // copied: a sink may outlive the lock
+    for (const auto& sink : sinks) {
+        std::lock_guard<std::recursive_mutex> lock(sink->mx);
+        if (sink->enabled) sink->fn(ev);
+    }
 }

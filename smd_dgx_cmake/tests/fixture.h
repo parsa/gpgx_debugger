@@ -19,6 +19,9 @@ namespace t {
 
 class Emu {
 public:
+    Emu() = default;
+    explicit Emu(const std::vector<uint8_t>& rom) : rom_(rom) {}
+
     bool start()
     {
         if (!rom_.ok()) return false;

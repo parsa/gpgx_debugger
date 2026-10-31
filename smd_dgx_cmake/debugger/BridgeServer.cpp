@@ -202,6 +202,7 @@ bool BridgeServer::start(unsigned short port)
 
 void BridgeServer::stop()
 {
+    requestStop();
     // First, before anything else: the host outlives this object in every
     // caller, and its own shutdown emits a final Stopped event. A sink still
     // pointing here would be called on a half-destroyed BridgeServer.
@@ -721,12 +722,16 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
     // state is right by construction.
     if (cmd == "pause") {
         const auto& hm = host_->hostMutations();
-        if (!(hm.pause && hm.pause())) be->pause();
+        const bool handled = hm.pause && hm.pause();
+        if (stopFlag_.load()) return "err stopping";
+        if (!handled) be->pause();
         return "ok";
     }
     if (cmd == "resume") {
         const auto& hm = host_->hostMutations();
-        if (!(hm.resume && hm.resume())) be->resume();
+        const bool handled = hm.resume && hm.resume();
+        if (stopFlag_.load()) return "err stopping";
+        if (!handled) be->resume();
 
         // Do not return while the caller could still observe the stale pause.
         // "Still paused" is not the same as "did not move": a breakpoint one
@@ -837,8 +842,9 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         // window); straight to the backend otherwise. See EmuHost::HostMutations.
         const auto& hm = host_->hostMutations();
         int id = -1;
-        if (!(hm.addBreakpoint && hm.addBreakpoint(bp, &id)))
-            id = be->addBreakpoint(bp);
+        const bool handled = hm.addBreakpoint && hm.addBreakpoint(bp, &id);
+        if (stopFlag_.load()) return "err stopping";
+        if (!handled) id = be->addBreakpoint(bp);
         return "ok " + std::to_string(id);
     }
 
@@ -847,15 +853,17 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         if (!parseNum(arg(), idv, 10)) return "err usage: bpdel <id>";
         const int id = (int)idv;
         const auto& hm = host_->hostMutations();
-        if (!(hm.removeBreakpoint && hm.removeBreakpoint(id)))
-            be->removeBreakpoint(id);
+        const bool handled = hm.removeBreakpoint && hm.removeBreakpoint(id);
+        if (stopFlag_.load()) return "err stopping";
+        if (!handled) be->removeBreakpoint(id);
         return "ok";
     }
 
     if (cmd == "bpclear") {
         const auto& hm = host_->hostMutations();
-        if (!(hm.clearBreakpoints && hm.clearBreakpoints()))
-            be->clearBreakpoints();
+        const bool handled = hm.clearBreakpoints && hm.clearBreakpoints();
+        if (stopFlag_.load()) return "err stopping";
+        if (!handled) be->clearBreakpoints();
         return "ok";
     }
 

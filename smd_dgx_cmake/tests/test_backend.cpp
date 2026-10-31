@@ -10,7 +10,31 @@
 #include <mutex>
 #include <thread>
 
+extern "C" {
+#include "shared.h"
+}
+
 using namespace synth;
+
+TEST(new_kaiserwave_board_keeps_unavailable_yx5200_disabled)
+{
+    // Select the new upstream Death & Lead board with an entirely synthetic
+    // header/checksum, retaining the executable test program and no game data.
+    auto rom = buildRom();
+    const char product[] = "GM 00000000-00";
+    std::copy(product, product + sizeof(product) - 1, rom.begin() + 0x180);
+    put16be(rom, 0x18E, 0x2284);
+    uint16_t checksum = 0;
+    for (size_t i = 0x200; i < rom.size() - 2; i += 2)
+        checksum = uint16_t(checksum + (uint16_t(rom[i]) << 8) + rom[i + 1]);
+    put16be(rom, uint32_t(rom.size() - 2), uint16_t(0x8DCF - checksum));
+
+    t::Emu e(rom);
+    REQUIRE(e.start()); REQUIRE(e.pauseAndWait());
+    REQUIRE(rominfo.checksum == 0x2284);
+    REQUIRE(rominfo.realchecksum == 0x8DCF);
+    CHECK((cart.special & HW_YX5200) == 0);
+}
 
 // ---------------------------------------------------------------------------
 // The byte-order contract (DebugState.h). Everything downstream — every view,

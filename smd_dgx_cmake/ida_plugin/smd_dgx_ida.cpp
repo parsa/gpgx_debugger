@@ -151,7 +151,7 @@ void cancel_codemap_requests()
         pending.swap(g_codemap_requests);
     }
     for (const auto& entry : pending)
-        // IDA destroys successfully cancelled requests (verified on 9.4).
+        // IDA destroys successfully cancelled requests (verified on 9.4 and 9.5).
         if (!entry.second->load()) cancel_exec_request(entry.first);
 }
 
@@ -259,6 +259,86 @@ bool evaluate_condition(uint32_t elang, const std::string& expr)
 // IDA (apply_codemap, eval_cond_req), and the two waits would deadlock. None of
 // the IDA calls below touch the emulation thread.
 // ---------------------------------------------------------------------------
+// A bridge client must not block teardown by waiting for IDA's main thread.
+// Submit NOWAIT, wait on shared completion, and cancel before joining clients.
+struct bridge_ui_state {
+    std::mutex mx;
+    std::condition_variable cv;
+    bool done = false;
+    bool executed = false;
+};
+std::mutex g_bridge_ui_mutex;
+bool g_bridge_ui_closed = false;
+std::map<int, std::shared_ptr<bridge_ui_state>> g_bridge_ui_pending;
+
+struct bridge_ui_req : exec_request_t {
+    exec_request_t& inner;
+    std::shared_ptr<bridge_ui_state> state;
+    bridge_ui_req(exec_request_t& request, std::shared_ptr<bridge_ui_state> completion)
+        : inner(request), state(std::move(completion)) {}
+    ~bridge_ui_req() override {
+        { std::lock_guard<std::mutex> lock(state->mx); state->done = true; }
+        state->cv.notify_all();
+    }
+    ssize_t idaapi execute() override {
+        try {
+            inner.execute();
+            std::lock_guard<std::mutex> lock(state->mx);
+            state->executed = true;
+        } catch (...) {
+            // Never strand the waiting caller or throw across IDA's callback ABI.
+        }
+        delete this; // SDK NOWAIT ownership pattern; cancellation destroys it too.
+        return 0;
+    }
+};
+
+bool execute_bridge_ui(exec_request_t& request)
+{
+    auto state = std::make_shared<bridge_ui_state>();
+    bridge_ui_req* wrapper = nullptr;
+    int id = -1;
+    bool failed = false;
+    {
+        std::lock_guard<std::mutex> lock(g_bridge_ui_mutex);
+        if (g_bridge_ui_closed) return false;
+        wrapper = new bridge_ui_req(request, state);
+        id = int(execute_sync(*wrapper, MFF_WRITE | MFF_NOWAIT));
+        std::lock_guard<std::mutex> completion(state->mx);
+        if (!state->done) {
+            if (id >= 0) g_bridge_ui_pending.emplace(id, state);
+            else failed = true;
+        }
+    }
+    if (failed) { delete wrapper; return false; }
+    bool executed;
+    {
+        std::unique_lock<std::mutex> lock(state->mx);
+        state->cv.wait(lock, [&] { return state->done; });
+        executed = state->executed;
+    }
+    if (id >= 0) {
+        std::lock_guard<std::mutex> lock(g_bridge_ui_mutex);
+        g_bridge_ui_pending.erase(id);
+    }
+    return executed;
+}
+
+void cancel_bridge_ui_requests()
+{
+    std::map<int, std::shared_ptr<bridge_ui_state>> pending;
+    {
+        std::lock_guard<std::mutex> lock(g_bridge_ui_mutex);
+        g_bridge_ui_closed = true;
+        pending.swap(g_bridge_ui_pending);
+    }
+    for (const auto& item : pending) {
+        bool done;
+        { std::lock_guard<std::mutex> lock(item.second->mx); done = item.second->done; }
+        if (!done) cancel_exec_request(item.first);
+    }
+}
+
 struct run_ctl_req : public exec_request_t {
     bool wantRun;
     bool ok = false;
@@ -275,12 +355,13 @@ struct run_ctl_req : public exec_request_t {
     }
 };
 
-bool host_resume() { run_ctl_req r(true);  execute_sync(r, MFF_WRITE); return r.ok; }
-bool host_pause()  { run_ctl_req r(false); execute_sync(r, MFF_WRITE); return r.ok; }
+bool host_resume() { run_ctl_req r(true);  return execute_bridge_ui(r) && r.ok; }
+bool host_pause()  { run_ctl_req r(false); return execute_bridge_ui(r) && r.ok; }
 
 struct add_bpt_req : public exec_request_t {
     Breakpoint bp;
     bool ok = false;
+    int backendId = -1;
     explicit add_bpt_req(const Breakpoint& b) : bp(b) {}
     ssize_t idaapi execute() override {
         ea_t ea = bp.start;
@@ -293,6 +374,11 @@ struct add_bpt_req : public exec_request_t {
         // creates the backend breakpoint — so we deliberately do NOT create it
         // here as well.
         ok = add_bpt(ea, t == BPT_EXEC ? 0 : size, t);
+        if (ok) {
+            const uint8_t vdp = bp.is_vdp ? 1 : 0;
+            auto it = g_bpIds.find(BpKey{ (uint8_t)bp.type, vdp, bp.start, bp.end });
+            if (it != g_bpIds.end()) backendId = it->second;
+        }
         return 0;
     }
 };
@@ -305,35 +391,35 @@ bool host_add_bpt(const Breakpoint& bp, int* idOut)
     if (!g_host || bp.cpu != Cpu::M68K) return false;
 
     add_bpt_req req(bp);
-    execute_sync(req, MFF_WRITE);
-    if (!req.ok) return false;
+    if (!execute_bridge_ui(req) || !req.ok) return false;
 
-    // ev_update_bpts has run by now and recorded the id under this key.
-    uint8_t vdp = bp.is_vdp ? 1 : 0;
-    auto it = g_bpIds.find(BpKey{ (uint8_t)bp.type, vdp, bp.start, bp.end });
-    if (idOut) *idOut = (it != g_bpIds.end()) ? it->second : -1;
+    // The IDA-thread request reads the map before another mutation can alter it.
+    if (idOut) *idOut = req.backendId;
     return true;
 }
 
 struct del_bpt_req : public exec_request_t {
-    ea_t ea;
-    explicit del_bpt_req(ea_t a) : ea(a) {}
-    ssize_t idaapi execute() override { del_bpt(ea); return 0; }
+    int backendId;
+    bool found = false;
+    explicit del_bpt_req(int id) : backendId(id) {}
+    ssize_t idaapi execute() override {
+        for (const auto& kv : g_bpIds) {
+            if (kv.second != backendId) continue;
+            ea_t ea = kv.first.start;
+            if (kv.first.vdp) ea += BREAKPOINTS_BASE;
+            found = true;
+            del_bpt(ea);
+            break;
+        }
+        return 0;
+    }
 };
 
 bool host_del_bpt(int id)
 {
     if (!g_host) return false;
-    // Find the address IDA knows this backend id by.
-    for (const auto& kv : g_bpIds) {
-        if (kv.second != id) continue;
-        ea_t ea = kv.first.start;
-        if (kv.first.vdp) ea += BREAKPOINTS_BASE;
-        del_bpt_req req(ea);
-        execute_sync(req, MFF_WRITE);
-        return true;
-    }
-    return false;   // not one of ours (a Z80 breakpoint): let the backend do it
+    del_bpt_req req(id);
+    return execute_bridge_ui(req) && req.found; // Z80 ids fall through
 }
 
 struct clear_bpts_req : public exec_request_t {
@@ -351,7 +437,7 @@ bool host_clear_bpts()
 {
     if (!g_host) return false;
     clear_bpts_req req;
-    execute_sync(req, MFF_WRITE);
+    if (!execute_bridge_ui(req)) return false;
     // IDA only knows about the 68000 ones; anything else (Z80, added straight
     // to the backend) still has to go.
     g_host->backend()->clearBreakpoints();
@@ -647,7 +733,10 @@ drc_t start_process(const char* path, const char* input_path)
     // The bridge first: its handlers hold this EmuHost*, and its event sink is
     // registered on it. Deleting the host underneath a live BridgeServer left
     // both dangling for as long as a client stayed connected.
+    if (g_bridge) g_bridge->requestStop();
+    cancel_bridge_ui_requests();
     delete g_bridge; g_bridge = nullptr;
+    { std::lock_guard<std::mutex> lock(g_bridge_ui_mutex); g_bridge_ui_closed = false; }
 
     delete g_host;
     g_host = new EmuHost();
@@ -746,6 +835,9 @@ ssize_t idaapi debugger_callback(void*, int msgid, va_list va)
         break;
 
     case debugger_t::ev_exit_process:
+        // Reject/cancel host-side work before joining any bridge client.
+        if (g_bridge) g_bridge->requestStop();
+        cancel_bridge_ui_requests();
         // Close the socket before the host: its handler holds an EmuHost*.
         delete g_bridge; g_bridge = nullptr;
         if (g_host) { g_host->stop(); }
@@ -1004,6 +1096,8 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
 
     ~smd_dgx_plugmod_t() override
     {
+        if (g_bridge) g_bridge->requestStop();
+        cancel_bridge_ui_requests();
 #ifdef SMD_DGX_IDA_VIEWS
         if (is_idaq()) smd_dgx_unregister_views();
 #endif

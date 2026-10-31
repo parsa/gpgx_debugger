@@ -296,6 +296,9 @@ TEST(bridge_wait_blocks_until_a_breakpoint_and_names_it)
     REQUIRE(w.ok);
     Raw raw;
     REQUIRE(raw.connect(portFor(10)));
+    // connect() can return before accept() registers this client for events.
+    // A reply proves registration before the breakpoint can fire.
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
 
     Breakpoint bp;
     bp.type = BpType::PC; bp.cpu = Cpu::M68K; bp.is_vdp = false;

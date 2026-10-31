@@ -45,6 +45,8 @@ public:
     static constexpr unsigned short kBasePort  = 27042;
     static constexpr unsigned short kPortRange = 16;
     bool start(unsigned short port = 0);
+    // Reject further mutations before the owner cancels host-side queued work.
+    void requestStop() { stopFlag_.store(true); }
     void stop();
     bool isRunning() const { return running_.load(); }
     unsigned short port() const { return port_; }

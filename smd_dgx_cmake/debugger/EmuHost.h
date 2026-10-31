@@ -6,6 +6,7 @@
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -52,7 +53,8 @@ public:
     // Returns a token for removeEventSink. A sink that does not outlive this
     // host MUST remove itself: stop() emits a final Stopped event, so a sink
     // belonging to an already-deleted object is called exactly when it is most
-    // certainly gone.
+    // certainly gone. Removal disables copied-but-pending dispatches and waits
+    // for an in-flight callback to finish (self-removal is allowed).
     int  addEventSink(EventSink s);
     void removeEventSink(int id);
 
@@ -136,9 +138,15 @@ private:
     IDebugTransport*  transport_ = nullptr;
     FrameSink         frameSink_;
     AudioSink         audioSink_;
-    struct Sink { int id; EventSink fn; };
+    struct Sink {
+        int id;
+        EventSink fn;
+        std::recursive_mutex mx;
+        bool enabled = true;
+        Sink(int token, EventSink callback) : id(token), fn(std::move(callback)) {}
+    };
     std::mutex        sinkMx_;
-    std::vector<Sink> eventSinks_;
+    std::vector<std::shared_ptr<Sink>> eventSinks_;
     int               nextSinkId_ = 1;
 
     std::thread       thread_;

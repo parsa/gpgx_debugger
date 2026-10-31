@@ -630,12 +630,12 @@ static const uint16 m68ki_exception_cycle_table[256] =
      50*MUL, /*  3: Address Error                         (unemulated) */
      34*MUL, /*  4: Illegal Instruction                                */
      38*MUL, /*  5: Divide by Zero -- ASG: changed from 42             */
-     40*MUL, /*  6: CHK -- ASG: chanaged from 44                       */
+     38*MUL, /*  6: CHK -- ASG: changed from 44                        */
      34*MUL, /*  7: TRAPV                                              */
      34*MUL, /*  8: Privilege Violation                                */
      34*MUL, /*  9: Trace                                              */
-      4*MUL, /* 10: 1010                                               */
-      4*MUL, /* 11: 1111                                               */
+     34*MUL, /* 10: 1010                                               */
+     34*MUL, /* 11: 1111                                               */
       4*MUL, /* 12: RESERVED                                           */
       4*MUL, /* 13: Coprocessor Protocol Violation        (unemulated) */
       4*MUL, /* 14: Format Error                                       */
@@ -649,13 +649,13 @@ static const uint16 m68ki_exception_cycle_table[256] =
       4*MUL, /* 22: RESERVED                                           */
       4*MUL, /* 23: RESERVED                                           */
      44*MUL, /* 24: Spurious Interrupt                                 */
-     54*MUL, /* 25: Level 1 Interrupt Autovector                       */
-     54*MUL, /* 26: Level 2 Interrupt Autovector                       */
-     54*MUL, /* 27: Level 3 Interrupt Autovector                       */
-     54*MUL, /* 28: Level 4 Interrupt Autovector                       */
-     54*MUL, /* 29: Level 5 Interrupt Autovector                       */
-     54*MUL, /* 30: Level 6 Interrupt Autovector                       */
-     54*MUL, /* 31: Level 7 Interrupt Autovector                       */
+     44*MUL, /* 25: Level 1 Interrupt Autovector                       */
+     44*MUL, /* 26: Level 2 Interrupt Autovector                       */
+     44*MUL, /* 27: Level 3 Interrupt Autovector                       */
+     44*MUL, /* 28: Level 4 Interrupt Autovector                       */
+     44*MUL, /* 29: Level 5 Interrupt Autovector                       */
+     44*MUL, /* 30: Level 6 Interrupt Autovector                       */
+     44*MUL, /* 31: Level 7 Interrupt Autovector                       */
      34*MUL, /* 32: TRAP #0 -- ASG: chanaged from 38                   */
      34*MUL, /* 33: TRAP #1                                            */
      34*MUL, /* 34: TRAP #2                                            */
@@ -1393,6 +1393,11 @@ INLINE void m68ki_exception_address_error(void)
 }
 #endif
 
+/* See MC68000 User Manual appendix B for autovectors interrupts processing time */
+/* 44 cycles + N wait-state cycles where N depends on CPU clock alignement with internal E clock (corresponding to CPU clock  / 10) when interrupt ack cycle starts */
+/* N minimal/maximal values are 6..15 cycles according to manual but real hardware measure apparently indicate 5..14 cycles (cf https://gendev.spritesmind.net/forum/viewtopic.php?f=2&t=2202&p=27485) */
+static uint m68ki_cycle_interrupts[10] = {50*MUL, 59*MUL, 58*MUL, 57*MUL, 56*MUL, 55*MUL, 54*MUL, 53*MUL, 52*MUL, 51*MUL};
+
 /* Service an interrupt request and start exception processing */
 INLINE void m68ki_exception_interrupt(uint int_level)
 {
@@ -1403,7 +1408,7 @@ INLINE void m68ki_exception_interrupt(uint int_level)
   #endif /* M68K_EMULATE_ADDRESS_ERROR */
 
   /* Turn off the stopped state */
-  CPU_STOPPED &= STOP_LEVEL_HALT;
+  CPU_STOPPED &= (STOP_LEVEL_HALT | STOP_LEVEL_WAIT);
 
   /* If we are halted, don't do anything */
   if(CPU_STOPPED)
@@ -1440,7 +1445,7 @@ INLINE void m68ki_exception_interrupt(uint int_level)
   m68ki_jump(new_pc);
 
   /* Update cycle count now */
-  USE_CYCLES(CYC_EXCEPTION[vector]);
+  USE_CYCLES(m68ki_cycle_interrupts[(m68ki_cpu.cycles / MUL) % 10]);
 }
 
 /* ASG: Check for interrupts */
