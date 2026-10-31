@@ -665,6 +665,39 @@ TEST(bridge_returns_the_access_log)
     raw.cmd("bpclear");
 }
 
+TEST(bridge_runto_return_address_and_budget)
+{
+    Wired w(27);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(27)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+
+    CHECK(raw.cmd("runto").rfind("err usage", 0) == 0);
+    CHECK(raw.cmd("runto instr=x").rfind("err usage", 0) == 0);
+
+    w.emu.parkM68kAt(kJsr);
+    raw.cmd("stepi");
+    CHECK(raw.cmd("wait 3000").rfind("ok paused pc=300 ", 0) == 0);
+    CHECK_STR(raw.cmd("runto return"), "ok");
+    const std::string r = raw.cmd("wait 3000");
+    CHECK(r.rfind("ok paused pc=21e ", 0) == 0);
+    CHECK(r.find(" reason=return") != std::string::npos);
+
+    CHECK_STR(raw.cmd("runto 302"), "ok");
+    const std::string a = raw.cmd("wait 3000");
+    CHECK(a.rfind("ok paused pc=302 ", 0) == 0);
+    CHECK(a.find(" reason=address") != std::string::npos);
+
+    CHECK_STR(raw.cmd("runto instr=3"), "ok");
+    const std::string b = raw.cmd("wait 3000");
+    CHECK(b.find(" reason=budget") != std::string::npos);
+
+    CHECK_STR(raw.cmd("runto frames=2"), "ok");
+    const std::string f = raw.cmd("wait 3000");
+    CHECK(f.find(" reason=budget") != std::string::npos);
+}
+
 TEST(bridge_falls_through_to_the_backend_without_a_host)
 {
     // The standalone app installs nothing, and a host may decline any single

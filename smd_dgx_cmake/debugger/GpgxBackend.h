@@ -5,6 +5,26 @@
 #include <map>
 #include <mutex>
 
+class GpgxBackend;
+
+// Where a run should stop on its own (GpgxBackend::armRun). Any combination;
+// the first condition met stops it, with the matching StopReason.
+struct RunLimits {
+    // Return: stop when PC == returnAddr AND A7 > entrySp (the frame that held
+    // the return address has been popped; a deeper re-entry does not count).
+    bool     toReturn   = false;
+    uint32_t returnAddr = 0;
+    uint32_t entrySp    = 0;
+    int64_t  stopAddr   = -1;       // StopAddress when PC reaches it; -1 = none
+    uint64_t maxInstructions = 0;   // Budget after this many retire; 0 = none
+    uint64_t maxFrames  = 0;        // Budget after this many frames; 0 = none
+
+    // Return from the routine the CPU is standing at the entry of: the return
+    // address is at (A7), and A7 is the entry stack pointer.
+    static RunLimits toReturnFromHere(GpgxBackend& b);
+    bool any() const { return toReturn || stopAddr >= 0 || maxInstructions || maxFrames; }
+};
+
 class GpgxBackend final : public IDebugBackend {
 public:
     GpgxBackend();
@@ -94,6 +114,13 @@ public:
     void     setExceptionCatch(uint64_t vectors) { excCatch_.store(vectors); }
     uint64_t exceptionCatch() const { return excCatch_.load(); }
     ExceptionInfo lastException() const;
+    // Arm run limits for the next resume (replacing any armed ones). Call while
+    // paused. They disarm when one fires, and on disarmRun().
+    void armRun(const RunLimits& lim);
+    void disarmRun() { runActive_.store(false); }
+    // The host calls this after every frame (frame budgets).
+    void onFrameEnd();
+
     // The access behind the current Watchpoint stop.
     AccessInfo lastAccess() const;
 
@@ -174,6 +201,13 @@ private:
     mutable std::mutex    excMx_;
     ExceptionInfo         lastExc_;
     AccessInfo            lastAccess_;   // guarded by excMx_
+
+    // Armed run limits: written while paused (armRun), read by the emulation
+    // thread; runActive_ publishes them.
+    std::atomic<bool>     runActive_ {false};
+    RunLimits             run_;
+    uint64_t              runStartExec_ = 0;
+    uint64_t              runFrames_ = 0;
 
     std::atomic<bool>     logOn_ {false};
     mutable std::mutex    logMx_;

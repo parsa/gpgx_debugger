@@ -543,6 +543,7 @@ bool GpgxBackend::loadRom(const char* path)
     abandoned_.store(false);        // a previous shutdown must not mute this run
     standingOnNext_ = false;
     execCount_ = execCountAtFrame_ = 0;
+    runActive_.store(false);
 
     bool ok = gx::load_rom(path);
     if (ok) running_.store(true);
@@ -569,6 +570,16 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t value)
         if (why == StopReason::None) {
             int so = stepOverAddr_.load();
             if (so >= 0 && (uint32_t)so == addr) { stepOverAddr_.store(-1); why = StopReason::Step; }
+        }
+        if (why == StopReason::None && runActive_.load(std::memory_order_relaxed)) {
+            const RunLimits& lim = run_;
+            if (lim.toReturn && addr == lim.returnAddr && m68k_get_reg(M68K_REG_A7) > lim.entrySp)
+                why = StopReason::RunToReturn;
+            else if (lim.stopAddr >= 0 && addr == uint32_t(lim.stopAddr))
+                why = StopReason::StopAddress;
+            else if (lim.maxInstructions && execCount_ - runStartExec_ >= lim.maxInstructions)
+                why = StopReason::Budget;
+            if (why != StopReason::None) runActive_.store(false);
         }
         int hit = -1;
         if (why == StopReason::None) {
@@ -609,6 +620,40 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t value)
         if (hit >= 0) watchHit(hit, m68k.ppc & 0xFFFFFF, Cpu::M68K, AccessSpace::Vdp,
                                (type & (HOOK_VRAM_W | HOOK_CRAM_W | HOOK_VSRAM_W)) != 0,
                                width, linear, value);
+    }
+}
+
+RunLimits RunLimits::toReturnFromHere(GpgxBackend& b)
+{
+    RunLimits lim;
+    const uint32_t sp = b.getM68kRegs().a[7];
+    const auto ret = b.readMemory(sp, 4);
+    lim.toReturn   = true;
+    lim.entrySp    = sp;
+    lim.returnAddr = ((uint32_t(ret[0]) << 24) | (uint32_t(ret[1]) << 16) |
+                      (uint32_t(ret[2]) << 8) | ret[3]) & 0xFFFFFF;
+    return lim;
+}
+
+void GpgxBackend::armRun(const RunLimits& lim)
+{
+    runActive_.store(false);
+    run_ = lim;
+    run_.returnAddr &= 0xFFFFFF;
+    if (run_.stopAddr >= 0) run_.stopAddr &= 0xFFFFFF;
+    // execCount_ already counts the instruction the CPU is standing on: the
+    // budget is instructions retired from here.
+    runStartExec_ = execCount_;
+    runFrames_ = 0;
+    runActive_.store(lim.any());
+}
+
+void GpgxBackend::onFrameEnd()
+{
+    if (!runActive_.load(std::memory_order_relaxed) || !run_.maxFrames) return;
+    if (++runFrames_ >= run_.maxFrames) {
+        runActive_.store(false);
+        requestPause(StopReason::Budget);
     }
 }
 
@@ -745,6 +790,7 @@ std::map<uint32_t, uint32_t> GpgxBackend::takeCodemap()
 void GpgxBackend::abortRunControl()
 {
     abandoned_.store(true);
+    runActive_.store(false);
     pauseReason_.store(0);
     stepInto_.store(false);
     stepIntoZ80_.store(false);

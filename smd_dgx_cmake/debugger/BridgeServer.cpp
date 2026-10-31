@@ -738,6 +738,39 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
     // behind its back its UI stays stuck on "suspended" forever. Asking IDA to
     // continue instead means IDA reaches the backend by its own path and its
     // state is right by construction.
+    // Resume with run limits: "runto [return|<hex-addr>] [instr=N] [frames=N]".
+    // "return" means the routine the CPU stands at the entry of: return address
+    // at (A7), stop once PC reaches it with A7 above its entry value. Returns
+    // like resume; the stop arrives via wait with reason=return|address|budget.
+    if (cmd == "runto") {
+        static const char* kUsage = "err usage: runto [return|<hex-addr>] [instr=N] [frames=N]";
+        RunLimits lim;
+        bool toReturn = false;
+        for (std::string tok = arg(); !tok.empty(); tok = arg()) {
+            uint32_t v = 0;
+            if (tok == "return") toReturn = true;
+            else if (tok.rfind("instr=", 0) == 0) {
+                if (!parseNum(tok.substr(6), v, 10) || !v) return kUsage;
+                lim.maxInstructions = v;
+            } else if (tok.rfind("frames=", 0) == 0) {
+                if (!parseNum(tok.substr(7), v, 10) || !v) return kUsage;
+                lim.maxFrames = v;
+            } else if (parseNum(tok, v) && lim.stopAddr < 0) lim.stopAddr = v;
+            else return kUsage;
+        }
+        if (!toReturn && !lim.any()) return kUsage;
+        GpgxBackend* g = host_->gpgx();
+        if (!host_->invoke([&] {
+                if (toReturn) {
+                    const RunLimits r = RunLimits::toReturnFromHere(*g);
+                    lim.toReturn = true; lim.returnAddr = r.returnAddr; lim.entrySp = r.entrySp;
+                }
+                g->armRun(lim);
+            }))
+            return "err emulator not running";
+        return handle("resume", client);
+    }
+
     // Opt-in access log. "log on [cap=N] [space:start-end ...]" (space m68k,
     // z80 or vdp; hex addresses; no range = everything) starts it afresh;
     // "log off" stops it; "log" reports its state; "log get [start] [count]"

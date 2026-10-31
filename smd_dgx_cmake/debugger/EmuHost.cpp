@@ -107,6 +107,7 @@ void EmuHost::run(std::string /*romPath*/)
         // A halted or STOPped 68000 ran no instruction this frame, so a pause
         // or step request is still pending: deliver it here instead.
         backend_.serviceStoppedCpu();
+        backend_.onFrameEnd();
 
         // Frame advance: run exactly N frames, then stop. An agent cannot
         // time an input by sleeping — while it is being debugged the
