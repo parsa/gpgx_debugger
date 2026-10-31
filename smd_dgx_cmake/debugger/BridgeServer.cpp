@@ -388,11 +388,13 @@ std::string BridgeServer::handleWait(Client& c, int timeoutMs)
 
 // A command that starts a run of its own (everything but a plain resume, which
 // continues whatever was going on) drops what an earlier one left pending: the
-// rest of a frame advance a breakpoint cut short, a request nothing answered.
+// rest of a frame advance or the limits of a runto that a breakpoint cut
+// short, a request nothing answered.
 void BridgeServer::startRunAfresh()
 {
     host_->advanceFrames(0);
     host_->gpgx()->cancelRunRequests();
+    host_->gpgx()->disarmRun();          // runto/runcase limits a stop interrupted
 }
 
 bool BridgeServer::runMachine()

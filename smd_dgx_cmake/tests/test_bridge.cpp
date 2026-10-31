@@ -1774,3 +1774,23 @@ TEST(a_step_armed_while_a_stop_is_being_published_is_not_lost)
     CHECK(w.emu.backend()->isPaused());
     CHECK(w.emu.gpgx()->lastStopReason() == StopReason::FrameAdvance);
 }
+
+// Run limits belong to the run that armed them: after a breakpoint interrupts
+// `runto instr=N`, a new frame advance must not stop on that old budget.
+TEST(a_fresh_run_drops_interrupted_run_limits)
+{
+    Wired w(55);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(55)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    const std::string add = raw.cmd("bpadd x 300");
+    REQUIRE(add.rfind("ok ", 0) == 0);
+    REQUIRE(raw.cmd("runto instr=5000") == "ok");         // well inside one frame
+    REQUIRE(raw.cmd("wait 3000").find(" reason=breakpoint") != std::string::npos);
+    REQUIRE(raw.cmd("bpdel " + add.substr(3)) == "ok");
+    REQUIRE(raw.cmd("frameadv 3") == "ok");
+    const std::string r = raw.cmd("wait 5000");
+    if (r.find(" reason=frame") == std::string::npos) std::printf("    wait: %s\n", r.c_str());
+    CHECK(r.find(" reason=frame") != std::string::npos);
+}

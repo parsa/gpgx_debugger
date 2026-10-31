@@ -296,8 +296,11 @@ void on_emu_event(const DebugEvent& ev)
                 exc.ea = ev.exc.access != ExcAccess::None ? ea_t(ev.exc.address) : BADADDR;
                 exc.info = describeException(ev.exc).c_str();
             } else if (bptEa != BADADDR) {
+                // An execute breakpoint over a range (or overlapping the
+                // opcode word) can be hit by an instruction that does not
+                // start at its address: then name it through hea too.
                 bptaddr_t& b = ida_ev.set_bpt();
-                b.hea = hardware ? bptEa : BADADDR;
+                b.hea = (hardware || bptEa != ea_t(ev.pc & 0xFFFFFF)) ? bptEa : BADADDR;
                 b.kea = BADADDR;
             } else {
                 ida_ev.set_eid(PROCESS_SUSPENDED);
