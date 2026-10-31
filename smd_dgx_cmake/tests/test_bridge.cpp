@@ -783,6 +783,32 @@ TEST(bridge_runcase_after_a_watchpoint_stop_keeps_its_registers)
     CHECK(r.find(" d0=deadbeef ") != std::string::npos);
 }
 
+// One MOVEM trips a range watchpoint once per register: many stops inside a
+// single instruction. runcase must still reach its end before applying a case.
+TEST(bridge_runcase_after_many_watchpoint_stops_in_one_instruction)
+{
+    Wired w(33);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(33)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+
+    // In work RAM: movem.l d0-d7/a0-a6,($FF4000).l ; bra.s *
+    const uint8_t code[] = { 0x48, 0xF9, 0x7F, 0xFF, 0x00, 0xFF, 0x40, 0x00, 0x60, 0xFE };
+    w.emu.backend()->writeMemory(0xFF0200, code, sizeof code);
+    raw.cmd("bpadd w ff4000 ff403f");
+    M68kRegs r = w.emu.backend()->getM68kRegs();
+    r.pc = 0xFF0200; r.sr = 0x2700; r.a[7] = kInitSp;
+    w.emu.backend()->setM68kRegs(r);
+    CHECK_STR(raw.cmd("resume"), "ok");
+    REQUIRE(raw.cmd("wait 3000").find(" reason=watchpoint access=write") != std::string::npos);
+
+    const std::string c = raw.cmd("runcase pc=300 a7=fff000 sr=2700 d0=deadbeef until=302");
+    CHECK(c.rfind("ok reason=address pc=302 ", 0) == 0);
+    CHECK(c.find(" d0=deadbeef ") != std::string::npos);
+    raw.cmd("bpclear");
+}
+
 TEST(bridge_runcase_from_a_save_state_is_deterministic)
 {
     Wired w(30);

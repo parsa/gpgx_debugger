@@ -872,10 +872,14 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         if (!settled.empty()) return settled;
         // A watchpoint or caught-exception stop sits inside an unfinished
         // instruction (or exception), which would complete over the case's
-        // state on resume. Step to the next instruction boundary first.
-        for (int tries = 0; tries < 8; ++tries) {
+        // state on resume. Step to the next instruction boundary first; one
+        // instruction can trip a watchpoint many times (MOVEM), so keep going,
+        // but never apply the case while still inside one.
+        auto midInstruction = [&] {
             const StopReason r = g->lastStopReason();
-            if (r != StopReason::Watchpoint && r != StopReason::Exception) break;
+            return r == StopReason::Watchpoint || r == StopReason::Exception;
+        };
+        for (int tries = 0; tries < 1024 && midInstruction(); ++tries) {
             const uint64_t s0 = seenStop();
             be->stepInto(Cpu::M68K);
             for (int i = 0; i < 2000 && seenStop() == s0; ++i) {
@@ -884,6 +888,7 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
             }
             if (seenStop() == s0) return "err could not reach an instruction boundary";
         }
+        if (midInstruction()) return "err could not reach an instruction boundary";
         bool stateOk = true;
         std::vector<uint8_t> before;
         // Everything that touches the machine happens on the emulation thread.
