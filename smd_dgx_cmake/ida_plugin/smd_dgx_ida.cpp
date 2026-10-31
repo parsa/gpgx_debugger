@@ -89,8 +89,23 @@ struct BpKey {
     bool operator<(const BpKey& o) const {
         return std::tie(type, vdp, start, end) < std::tie(o.type, o.vdp, o.start, o.end);
     }
+    bool operator==(const BpKey& o) const {
+        return std::tie(type, vdp, start, end) == std::tie(o.type, o.vdp, o.start, o.end);
+    }
 };
 std::map<BpKey, int> g_bpIds;
+
+// IDA writes a breakpoint added while the process is suspended only when it
+// resumes (ev_update_bpts runs on the debugger thread then). A bridge client
+// needs a usable id immediately, so such a breakpoint is created in the
+// backend at once and adopted when IDA writes it. Until then this plugin
+// mirrors IDA's deletions, disables and moves of it (see dbg_bpt_changed).
+// IDA breakpoint id -> backend key, for breakpoints IDA has not written yet.
+std::map<inode_t, BpKey> g_earlyBps;
+// Guards g_bpIds/g_earlyBps: update_bpts runs on the debugger thread, the
+// bridge requests and notifications on the main thread. Never held across an
+// IDA call.
+std::mutex g_bpMx;
 
 // Audio device, alive for as long as the emulator runs. Written to from the
 // emulation thread only (via the audio sink), created/destroyed around it.
@@ -358,6 +373,76 @@ struct run_ctl_req : public exec_request_t {
 bool host_resume() { run_ctl_req r(true);  return execute_bridge_ui(r) && r.ok; }
 bool host_pause()  { run_ctl_req r(false); return execute_bridge_ui(r) && r.ok; }
 
+void translate_bpt(ea_t ea, int size, bpttype_t itype,
+                   uint8_t& t1, uint8_t& t2, uint8_t& vdp, uint32_t& start, uint32_t& end);
+
+// Main thread only. The backend id for IDA's breakpoint at `ea`: the one
+// update_bpts recorded, or, if IDA has not written it yet, a backend
+// breakpoint created now and remembered as early.
+int adopt_or_create_early(ea_t ea)
+{
+    bpt_t ib;
+    if (!g_host || !get_bpt(ea, &ib)) return -1;
+    uint8_t t1, t2, vdp; uint32_t start, end;
+    translate_bpt(ib.ea, ib.size, ib.type, t1, t2, vdp, start, end);
+    const BpKey key{ t1, vdp, start, end };
+    std::lock_guard<std::mutex> lock(g_bpMx);
+    auto it = g_bpIds.find(key);
+    if (it != g_bpIds.end()) return it->second;
+    // Disabled, partly or fully written, or a read+write pair: leave it to IDA.
+    if (t2 || !ib.enabled() || !ib.is_inactive()) return -1;
+    Breakpoint bp;
+    bp.type   = (BpType)t1;
+    bp.is_vdp = vdp != 0;
+    bp.start  = start;
+    bp.end    = end;
+    if (!ib.cndbody.empty()) {
+        bp.condition = ib.cndbody.c_str();
+        bp.elang     = uint32_t(ib.get_cnd_elang_idx());
+    }
+    const int id = g_host->backend()->addBreakpoint(bp);
+    g_bpIds[key] = id;
+    g_earlyBps[ib.bptid] = key;
+    return id;
+}
+
+// Remove an early (not yet IDA-written) backend breakpoint. Caller holds g_bpMx.
+void drop_early_locked(std::map<inode_t, BpKey>::iterator early)
+{
+    auto it = g_bpIds.find(early->second);
+    if (it != g_bpIds.end()) {
+        if (g_host) g_host->backend()->removeBreakpoint(it->second);
+        g_bpIds.erase(it);
+    }
+    g_earlyBps.erase(early);
+}
+
+void drop_early_id(int backendId)
+{
+    std::lock_guard<std::mutex> lock(g_bpMx);
+    for (auto early = g_earlyBps.begin(); early != g_earlyBps.end(); ++early) {
+        auto it = g_bpIds.find(early->second);
+        if (it != g_bpIds.end() && it->second == backendId) { drop_early_locked(early); return; }
+    }
+}
+
+// dbg_bpt_changed: keep early breakpoints in step with IDA until IDA owns them.
+void on_bpt_changed(int code, const bpt_t* b)
+{
+    if (!b) return;
+    std::lock_guard<std::mutex> lock(g_bpMx);
+    auto early = g_earlyBps.find(b->bptid);
+    if (early == g_earlyBps.end()) return;
+    if (code == BPTEV_REMOVED) { drop_early_locked(early); return; }
+    if (code != BPTEV_CHANGED) return;
+    uint8_t t1, t2, vdp; uint32_t start, end;
+    translate_bpt(b->ea, b->size, b->type, t1, t2, vdp, start, end);
+    // Disabled or moved/resized/retyped: the early copy no longer matches.
+    // An enabled breakpoint is written by IDA on resume as usual.
+    if (!b->enabled() || t2 || !(early->second == BpKey{ t1, vdp, start, end }))
+        drop_early_locked(early);
+}
+
 struct add_bpt_req : public exec_request_t {
     Breakpoint bp;
     bool ok = false;
@@ -374,11 +459,7 @@ struct add_bpt_req : public exec_request_t {
         // creates the backend breakpoint — so we deliberately do NOT create it
         // here as well.
         ok = add_bpt(ea, t == BPT_EXEC ? 0 : size, t);
-        if (ok) {
-            const uint8_t vdp = bp.is_vdp ? 1 : 0;
-            auto it = g_bpIds.find(BpKey{ (uint8_t)bp.type, vdp, bp.start, bp.end });
-            if (it != g_bpIds.end()) backendId = it->second;
-        }
+        if (ok) backendId = adopt_or_create_early(ea);
         return 0;
     }
 };
@@ -403,14 +484,20 @@ struct del_bpt_req : public exec_request_t {
     bool found = false;
     explicit del_bpt_req(int id) : backendId(id) {}
     ssize_t idaapi execute() override {
-        for (const auto& kv : g_bpIds) {
-            if (kv.second != backendId) continue;
-            ea_t ea = kv.first.start;
-            if (kv.first.vdp) ea += BREAKPOINTS_BASE;
-            found = true;
-            del_bpt(ea);
-            break;
+        ea_t ea = BADADDR;
+        {
+            std::lock_guard<std::mutex> lock(g_bpMx);
+            for (const auto& kv : g_bpIds) {
+                if (kv.second != backendId) continue;
+                ea = kv.first.start;
+                if (kv.first.vdp) ea += BREAKPOINTS_BASE;
+                break;
+            }
         }
+        found = ea != BADADDR;
+        if (found) del_bpt(ea);
+        // An early breakpoint IDA never wrote gets no update_bpts deletion.
+        if (found) drop_early_id(backendId);
         return 0;
     }
 };
@@ -680,13 +767,34 @@ void add_one_bpt(uint8_t type, uint8_t vdp, uint32_t start, uint32_t end, ea_t i
         bp.condition = ibp.cndbody.c_str();
         bp.elang     = uint32_t(ibp.get_cnd_elang_idx());
     }
+    const BpKey key{type, vdp, start, end};
+    std::lock_guard<std::mutex> lock(g_bpMx);
+    // Created early for a bridge client: IDA now owns it. Reuse, never
+    // duplicate — unless its condition was edited meanwhile; then replace it.
+    for (auto early = g_earlyBps.begin(); early != g_earlyBps.end(); ++early) {
+        if (!(early->second == key)) continue;
+        g_earlyBps.erase(early);
+        auto it = g_bpIds.find(key);
+        if (it == g_bpIds.end()) break;
+        for (const auto& have : g_host->backend()->getBreakpoints())
+            if (have.id == it->second && have.condition == bp.condition &&
+                (bp.condition.empty() || have.elang == bp.elang))
+                return;
+        g_host->backend()->removeBreakpoint(it->second);
+        g_bpIds.erase(it);
+        break;
+    }
     int id = g_host->backend()->addBreakpoint(bp);
-    g_bpIds[BpKey{type, vdp, start, end}] = id;
+    g_bpIds[key] = id;
 }
 
 void del_one_bpt(uint8_t type, uint8_t vdp, uint32_t start, uint32_t end)
 {
-    auto it = g_bpIds.find(BpKey{type, vdp, start, end});
+    const BpKey key{type, vdp, start, end};
+    std::lock_guard<std::mutex> lock(g_bpMx);
+    for (auto early = g_earlyBps.begin(); early != g_earlyBps.end(); ++early)
+        if (early->second == key) { g_earlyBps.erase(early); break; }
+    auto it = g_bpIds.find(key);
     if (it != g_bpIds.end()) {
         g_host->backend()->removeBreakpoint(it->second);
         g_bpIds.erase(it);
@@ -741,7 +849,11 @@ drc_t start_process(const char* path, const char* input_path)
     delete g_host;
     g_host = new EmuHost();
     g_romSize = 0;
-    g_bpIds.clear();
+    {
+        std::lock_guard<std::mutex> lock(g_bpMx);
+        g_bpIds.clear();
+        g_earlyBps.clear();
+    }
     stop_audio();
     { std::lock_guard<std::mutex> lk(g_events.mx); g_events.q.clear(); }
 
@@ -1081,9 +1193,23 @@ struct smd_dgx_z80_plugmod_t : public plugmod_t, public event_listener_t {
 };
 
 struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
+    // HT_DBG needs its own listener object: this one already answers HT_IDD.
+    struct bpt_listener_t : public event_listener_t {
+        ssize_t idaapi on_event(ssize_t code, va_list va) override
+        {
+            if (code == dbg_bpt_changed) {
+                const int bptev = va_arg(va, int);
+                const bpt_t* b = va_arg(va, bpt_t*);
+                on_bpt_changed(bptev, b);
+            }
+            return 0;
+        }
+    } bpt_listener;      // unhooked automatically when destroyed
+
     smd_dgx_plugmod_t()
     {
         hook_event_listener(HT_IDD, this);
+        hook_event_listener(HT_DBG, &bpt_listener);
         dbg = &debugger;
 #ifdef SMD_DGX_IDA_VIEWS
         if (is_idaq()) smd_dgx_register_views();
