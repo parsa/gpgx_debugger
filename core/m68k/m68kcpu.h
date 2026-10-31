@@ -1388,7 +1388,14 @@ INLINE void m68ki_exception_illegal(void)
 /* Exception for address error */
 INLINE void m68ki_exception_address_error(void)
 {
-  uint sr = m68ki_init_exception();
+  uint sr;
+
+#if defined(HOOK_CPU) && defined(M68K_MAIN_CPU_HOOKS)
+  /* The faulting instruction was unwound (longjmp): it is no longer running. */
+  m68k_in_instruction = 0;
+#endif
+
+  sr = m68ki_init_exception();
 
   /* If we were processing a bus error, address error, or reset,
      * this is a catastrophic failure.
