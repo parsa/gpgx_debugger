@@ -850,6 +850,27 @@ TEST(bridge_runcase_after_a_z80_stop_inside_a_68000_write_keeps_its_flags)
     CHECK(r.find(" sr=271f ") != std::string::npos);
 }
 
+// a7= names the stack of the case's own mode, even when it equals the current
+// (other-bank) stack pointer.
+TEST(bridge_runcase_a7_follows_the_cases_sr_bank)
+{
+    Wired w(35);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(35)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+
+    // Supervisor, ISP = $FFF000, USP = 0.
+    REQUIRE(raw.cmd("runcase pc=300 sr=2700 a7=fff000 mem=fff000:0000021e return").rfind("ok reason=return", 0) == 0);
+    REQUIRE(raw.cmd("wreg68k usp=0") == "ok");
+    REQUIRE(raw.cmd("wreg68k a7=fff000") == "ok");
+    // User mode, same A7 value: the user stack must be $FFF000 for the case.
+    const std::string r = raw.cmd("runcase pc=300 sr=0000 a7=fff000 mem=fff000:0000021e return");
+    CHECK(r.rfind("ok reason=return pc=21e ", 0) == 0);
+    CHECK(r.find(" a7=fff004 ") != std::string::npos);
+    CHECK(r.find(" usp=fff004 ") != std::string::npos);
+}
+
 TEST(bridge_runcase_from_a_save_state_is_deterministic)
 {
     Wired w(30);

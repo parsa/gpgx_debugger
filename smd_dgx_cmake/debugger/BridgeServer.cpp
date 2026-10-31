@@ -908,10 +908,18 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         if (!host_->invoke([&] {
                 if (!statePath.empty() && !(stateOk = g->loadState(statePath.c_str()))) return;
                 M68kRegs r = g->getM68kRegs();
+                bool haveA7 = false;
                 for (const auto& [i, val] : regs) {
                     if (i < 8) r.d[i] = val;
-                    else if (i < 16) r.a[i - 8] = val;
+                    else if (i < 16) { r.a[i - 8] = val; haveA7 |= (i == 15); }
                     else r.sr = val;
+                }
+                // a7= is the stack of the case's own mode: put it in the bank
+                // the final SR selects. setM68kRegs infers an A7 edit from a
+                // changed value, which misses an a7= equal to the old pointer.
+                if (haveA7) {
+                    if (r.sr & 0x2000) r.isp = r.a[7];
+                    else r.usp = r.a[7];
                 }
                 r.pc = pc & 0xFFFFFF;
                 g->setM68kRegs(r);
