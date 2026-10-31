@@ -141,6 +141,48 @@ enum class StopReason : uint8_t {
     Budget,         // an instruction or frame budget ran out
 };
 
+// A 68000 exception, as the core raised it.
+enum class ExcAccess : uint8_t { None = 0, Read, Write, Fetch };
+struct ExceptionInfo {
+    uint8_t   vector  = 0;    // 2 bus error, 3 address error, 4 illegal, 5 zero divide,
+                              // 6 CHK, 7 TRAPV, 8 privilege, 9 trace, 10/11 line A/F,
+                              // 32..47 TRAP #0..#15, ...
+    uint32_t  pc      = 0;    // start of the instruction that raised it
+    uint32_t  framePc = 0;    // PC stacked in the exception frame
+    uint32_t  address = 0;    // bus/address error: the faulting access address
+    ExcAccess access  = ExcAccess::None;   // bus/address error: what that access was
+    uint16_t  sr      = 0;    // SR before the exception (as stacked)
+};
+
+inline const char* exceptionName(unsigned vector)
+{
+    switch (vector) {
+    case 2:  return "bus_error";
+    case 3:  return "address_error";
+    case 4:  return "illegal";
+    case 5:  return "zero_divide";
+    case 6:  return "chk";
+    case 7:  return "trapv";
+    case 8:  return "privilege";
+    case 9:  return "trace";
+    case 10: return "line_a";
+    case 11: return "line_f";
+    case 14: return "format_error";
+    case 15: return "uninitialized_interrupt";
+    default: return (vector >= 32 && vector < 48) ? "trap" : (vector >= 24 && vector < 32) ? "interrupt" : "exception";
+    }
+}
+
+inline const char* excAccessName(ExcAccess a)
+{
+    switch (a) {
+    case ExcAccess::Read:  return "read";
+    case ExcAccess::Write: return "write";
+    case ExcAccess::Fetch: return "fetch";
+    default:               return "none";
+    }
+}
+
 // Stable lower-case names, used verbatim on the bridge ("reason=halted").
 inline const char* stopReasonName(StopReason r)
 {

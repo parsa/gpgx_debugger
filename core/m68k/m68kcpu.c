@@ -7,6 +7,7 @@ extern void m68k_instr_callback();
 
 #define m68ki_cpu m68k
 #define MUL (7)
+#define M68K_EXCEPTION_HOOK   /* main CPU only: report exceptions to cpu_hook */
 
 /* ======================================================================== */
 /* ================================ INCLUDES ============================== */

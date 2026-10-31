@@ -54,12 +54,14 @@ struct DebugEvent {
         Paused,         // pc valid; changed = codemap since last event
         Resumed,
         Stopped,        // emulator exiting; changed flushed one last time
+        Exception,      // a 68000 exception was raised (exc); not a stop by itself
     };
     Type     type{};
     Cpu      cpu = Cpu::M68K;   // which processor stopped
     uint32_t pc  = 0;
     int      bpId = -1;         // breakpoint that caused it, or -1
     StopReason reason = StopReason::None;   // Paused: why
+    ExceptionInfo exc;          // Exception, or Paused with reason Exception
     uint64_t stopSeq = 0;       // monotonic; distinguishes a new stop from a seen one
     std::map<uint32_t, uint32_t> changed;   // executed pc -> predecessor pc
 };
@@ -67,12 +69,58 @@ struct DebugEvent {
 // A Paused event's cause as space-separated key=value pairs, starting with
 // "reason=<name>". The same text is appended to bridge replies and returned by
 // IDA's smd_dgx_stop(), so every client parses one format.
+// Upper-case hex, zero-padded to `digits`. (No printf family: IDA's headers
+// poison it for code that includes them, and this header is shared.)
+inline std::string hexDigits(uint32_t v, int digits)
+{
+    std::string s(size_t(digits), '0');
+    for (int i = digits - 1; i >= 0; --i, v >>= 4) s[size_t(i)] = "0123456789ABCDEF"[v & 15];
+    return s;
+}
+
+inline std::string describeException(const ExceptionInfo& x)
+{
+    std::string s = "vector=" + std::to_string(unsigned(x.vector))
+                  + " name=" + exceptionName(x.vector)
+                  + " fault_pc=" + hexDigits(x.pc & 0xFFFFFF, 6)
+                  + " frame_pc=" + hexDigits(x.framePc & 0xFFFFFF, 6)
+                  + " sr=" + hexDigits(x.sr, 4);
+    if (x.access != ExcAccess::None)
+        s += std::string(" access=") + excAccessName(x.access)
+           + " addr=" + hexDigits(x.address & 0xFFFFFF, 6);
+    return s;
+}
+
 inline std::string describeStop(const DebugEvent& ev)
 {
+    if (ev.type == DebugEvent::Type::Exception) return describeException(ev.exc);
     if (ev.type != DebugEvent::Type::Paused) return {};
     std::string s = "reason=";
     s += stopReasonName(ev.reason);
+    if (ev.reason == StopReason::Exception) s += " " + describeException(ev.exc);
     return s;
+}
+
+// Exception catch mask from text: none | faults (vectors 2-11, 14, 15) |
+// all (every reported vector) | hex mask (bit n = vector n, optional 0x).
+inline bool parseCatchSpec(const std::string& spec, uint64_t& mask)
+{
+    if (spec == "none")   { mask = 0; return true; }
+    if (spec == "faults") { mask = 0xCFFCull; return true; }
+    if (spec == "all")    { mask = ~0ull & ~0xFF000003ull; return true; }   // not 0, 1, 24-31
+    const char* s = spec.c_str();
+    if (spec.rfind("0x", 0) == 0 || spec.rfind("0X", 0) == 0) s += 2;
+    if (!*s) return false;
+    uint64_t v = 0;
+    for (; *s; ++s) {
+        const char c = *s;
+        const int d = (c >= '0' && c <= '9') ? c - '0' : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                    : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+        if (d < 0 || (v >> 60)) return false;
+        v = (v << 4) | uint64_t(d);
+    }
+    mask = v;
+    return true;
 }
 
 // Bidirectional transport endpoint. The emulator side sends events and

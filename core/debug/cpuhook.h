@@ -75,6 +75,10 @@ typedef enum {
   // REGS
   HOOK_VDP_REG  = (1 << 12),
   HOOK_M68K_REG = (1 << 13),
+
+  // M68K exception processing, before the vector is read: value = vector
+  // number; the exception frame is already on the supervisor stack.
+  HOOK_M68K_EXC = (1 << 14),
 } hook_type_t;
 
 typedef void (*cpu_hook_t)(hook_type_t type, int width, unsigned int address, unsigned int value);

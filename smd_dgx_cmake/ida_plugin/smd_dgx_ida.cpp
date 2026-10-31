@@ -97,6 +97,41 @@ error_t idaapi idc_smd_dgx_stop(idc_value_t*, idc_value_t* res)
 const char kNoArgs[] = { 0 };
 const ext_idcfunc_t kStopFunc = { "smd_dgx_stop", idc_smd_dgx_stop, kNoArgs, nullptr, 0, 0 };
 
+// smd_dgx_catch([spec]): which 68000 exceptions stop the process (see
+// parseCatchSpec: none | faults | all | hex mask). Returns "mask=<hex>", or
+// "error: ..." for a bad spec. Every exception is reported either way.
+error_t idaapi idc_smd_dgx_catch(idc_value_t* argv, idc_value_t* res)
+{
+    if (!g_host) { res->set_string("error: no process"); return eOk; }
+    if (argv[0].vtype == VT_STR) {
+        uint64_t mask = 0;
+        if (!parseCatchSpec(argv[0].c_str(), mask)) {
+            res->set_string("error: catch spec is none|faults|all|<hex mask>");
+            return eOk;
+        }
+        g_host->gpgx()->setExceptionCatch(mask);
+    }
+    char out[40];
+    qsnprintf(out, sizeof out, "mask=%llx", (unsigned long long)g_host->gpgx()->exceptionCatch());
+    res->set_string(out);
+    return eOk;
+}
+const char kCatchArgs[] = { VT_STR, 0 };
+const idc_value_t kCatchDefault("");
+const ext_idcfunc_t kCatchFunc = { "smd_dgx_catch", idc_smd_dgx_catch, kCatchArgs, &kCatchDefault, 1, 0 };
+
+// IDA shows a warning for an exception it does not know. Define every vector
+// the core reports, so a caught one is logged and stops without a dialog.
+void define_m68k_exceptions()
+{
+    for (unsigned v = 2; v < 64; ++v) {
+        if (v >= 24 && v < 32) continue;              // interrupts: not reported
+        char name[32];
+        qsnprintf(name, sizeof name, "m68k_%s_%u", exceptionName(v), v);
+        define_exception(v, name, name, EXC_BREAK | EXC_MSG);
+    }
+}
+
 // Backend breakpoint identity (type,start,end,is_vdp): IDA's update_bpts
 // names breakpoints by address/type, the backend by id.
 struct BpKey {
@@ -232,7 +267,15 @@ void on_emu_event(const DebugEvent& ev)
                     ev.reason == StopReason::Halted ? "halted (double fault)" : "stopped (STOP/wait)",
                     unsigned(ev.pc & 0xFFFFFF), why.c_str());
         }
-        ida_ev.set_eid(PROCESS_SUSPENDED);
+        if (ev.reason == StopReason::Exception) {
+            excinfo_t& exc = ida_ev.set_exception();
+            exc.code = ev.exc.vector;
+            exc.can_cont = true;
+            exc.ea = ev.exc.access != ExcAccess::None ? ea_t(ev.exc.address) : BADADDR;
+            exc.info = describeException(ev.exc).c_str();
+        } else {
+            ida_ev.set_eid(PROCESS_SUSPENDED);
+        }
         ida_ev.ea = ev.pc;
         g_events.enqueue(ida_ev);
         break;
@@ -245,6 +288,8 @@ void on_emu_event(const DebugEvent& ev)
     case DebugEvent::Type::Resumed:
         if (g_audio) g_audio->pause(false);
         break;
+    case DebugEvent::Type::Exception:
+        break;          // not caught: only stops reach IDA (and the bridge sees all)
     }
 }
 
@@ -1123,6 +1168,7 @@ ssize_t idaapi debugger_callback(void*, int msgid, va_list va)
         switch (event->eid()) {
         case STEP:
         case PROCESS_SUSPENDED:
+        case EXCEPTION:
             if (req == dbg_null || req == dbg_run_to)
                 if (g_host) g_host->backend()->resume();
             break;
@@ -1360,6 +1406,8 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
         hook_event_listener(HT_IDD, this);
         hook_event_listener(HT_DBG, &bpt_listener);
         add_idc_func(kStopFunc);
+        add_idc_func(kCatchFunc);
+        define_m68k_exceptions();
         dbg = &debugger;
 #ifdef SMD_DGX_IDA_VIEWS
         if (is_idaq()) smd_dgx_register_views();
@@ -1375,6 +1423,7 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
         if (g_bridge) g_bridge->requestStop();
         cancel_bridge_ui_requests();
         del_idc_func(kStopFunc.name);
+        del_idc_func(kCatchFunc.name);
 #ifdef SMD_DGX_IDA_VIEWS
         if (is_idaq()) smd_dgx_unregister_views();
 #endif

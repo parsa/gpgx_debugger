@@ -1153,6 +1153,17 @@ INLINE void m68ki_jump(uint new_pc)
 
 INLINE void m68ki_jump_vector(uint vector)
 {
+#if defined(HOOK_CPU) && defined(M68K_EXCEPTION_HOOK)
+  /* Every exception passes here once its frame is stacked: tell a debugger.
+     One that stopped here and moved PC has taken over: skip the vector. */
+  if (cpu_hook)
+  {
+    const uint pc = REG_PC;
+    cpu_hook(HOOK_M68K_EXC, 0, 0, vector);
+    if (REG_PC != pc)
+      return;
+  }
+#endif
   m68ki_use_data_space() /* auto-disable (see m68kcpu.h) */
   REG_PC = m68ki_read_32(vector<<2);
 }

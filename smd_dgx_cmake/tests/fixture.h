@@ -35,6 +35,8 @@ public:
                 ++pauseSeq_;
             } else if (ev.type == DebugEvent::Type::Resumed) {
                 paused_ = false;
+            } else if (ev.type == DebugEvent::Type::Exception) {
+                exceptions_.push_back(ev);
             }
             cv_.notify_all();
         });
@@ -45,6 +47,7 @@ public:
 
     EmuHost*       host()    { return &host_; }
     IDebugBackend* backend() { return host_.backend(); }
+    GpgxBackend*   gpgx()    { return host_.gpgx(); }
 
     // Wait for a pause event newer than `since`. Returns false on timeout.
     bool waitPause(uint64_t since, int ms = 5000)
@@ -60,6 +63,14 @@ public:
     // The whole last Paused event: reason, breakpoint, exception, access.
     DebugEvent pauseEvent() { std::lock_guard<std::mutex> lk(mx_); return pauseEvent_; }
     StopReason pauseReason() { return pauseEvent().reason; }
+
+    // Exception notifications (non-stopping events), oldest first.
+    std::vector<DebugEvent> exceptions() { std::lock_guard<std::mutex> lk(mx_); return exceptions_; }
+    bool waitExceptions(size_t n, int ms = 5000)
+    {
+        std::unique_lock<std::mutex> lk(mx_);
+        return cv_.wait_for(lk, std::chrono::milliseconds(ms), [&] { return exceptions_.size() >= n; });
+    }
 
     bool pauseAndWait(int ms = 5000)
     {
@@ -102,6 +113,7 @@ private:
     uint32_t pausePc_  = 0;
     Cpu      pauseCpu_ = Cpu::M68K;
     DebugEvent pauseEvent_;
+    std::vector<DebugEvent> exceptions_;
     uint64_t pauseSeq_ = 0;
 };
 

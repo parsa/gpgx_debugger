@@ -552,7 +552,7 @@ bool GpgxBackend::loadRom(const char* path)
 // ---------------------------------------------------------------------------
 // CPU hook
 // ---------------------------------------------------------------------------
-void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t /*value*/)
+void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t value)
 {
     if (type & HOOK_M68K_E) {
         // codemap: record predecessor of every executed ROM/RAM address
@@ -579,6 +579,8 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t /*value
     } else if (type & (HOOK_M68K_R | HOOK_M68K_W)) {
         const int hit = matchBreakpoint(type, addr, width);
         if (hit >= 0) firePause(lastPc_, Cpu::M68K, hit, StopReason::Watchpoint);
+    } else if (type & HOOK_M68K_EXC) {
+        onM68kException(value);
     } else if (type & HOOK_Z80_E) {
         onZ80Exec(addr & 0xFFFF);
     } else if (type & (HOOK_Z80_R | HOOK_Z80_W)) {
@@ -596,6 +598,60 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t /*value
         else if (type & (HOOK_VSRAM_R | HOOK_VSRAM_W)) linear += VDP_BP_VSRAM;
         const int hit = matchBreakpoint(type, linear, width);
         if (hit >= 0) firePause(lastPc_, Cpu::M68K, hit, StopReason::Watchpoint);
+    }
+}
+
+ExceptionInfo GpgxBackend::lastException() const
+{
+    std::lock_guard<std::mutex> lk(excMx_);
+    return lastExc_;
+}
+
+// Called from the core with the frame already stacked and SR already switched
+// to supervisor mode, just before the vector is read. The frame holds what the
+// exception knows: the old SR, the stacked PC, and for a bus/address error the
+// access that faulted.
+void GpgxBackend::onM68kException(unsigned vector)
+{
+    ExceptionInfo x;
+    x.vector = uint8_t(vector);
+    x.pc = m68k.ppc & 0xFFFFFF;                  // start of the faulting instruction
+    const uint32_t sp = m68k_get_reg(M68K_REG_A7);
+    // Direct memory only: a stack pointed at I/O must not trigger read handlers.
+    auto frame = [](uint32_t at, uint32_t n) {
+        std::vector<uint8_t> b(n, 0);
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t a = (at + i) & 0xFFFFFF;
+            const cpu_memory_map* map = &m68k.memory_map[(a >> 16) & 0xFF];
+            if (map->base) b[i] = map->base[(a & 0xFFFF) ^ 1];
+        }
+        return b;
+    };
+    auto be16 = [](const std::vector<uint8_t>& b, size_t o) { return uint16_t((b[o] << 8) | b[o + 1]); };
+    auto be32 = [&](const std::vector<uint8_t>& b, size_t o) { return (uint32_t(be16(b, o)) << 16) | be16(b, o + 2); };
+    if (vector == 2 || vector == 3) {
+        // status(R/W I/N FC), access address, IR, SR, PC
+        const auto f = frame(sp, 14);
+        const uint16_t status = be16(f, 0);
+        x.address = be32(f, 2) & 0xFFFFFF;
+        x.sr      = be16(f, 8);
+        x.framePc = be32(f, 10) & 0xFFFFFF;
+        const bool program = (status & 3) == 2;  // FC 2/6: program space
+        x.access = (status & 0x10) ? (program ? ExcAccess::Fetch : ExcAccess::Read) : ExcAccess::Write;
+    } else {
+        const auto f = frame(sp, 6);                // SR, PC
+        x.sr      = be16(f, 0);
+        x.framePc = be32(f, 2) & 0xFFFFFF;
+    }
+    { std::lock_guard<std::mutex> lk(excMx_); lastExc_ = x; }
+    if (excCb_) excCb_(x);
+    if (vector < 64 && (excCatch_.load() >> vector) & 1) {
+        const uint32_t before = m68k.pc;
+        firePause(x.pc, Cpu::M68K, -1, StopReason::Exception);
+        // Moving PC here abandons the vector (see m68ki_jump_vector), and the
+        // CPU then stands on the new PC like after any other stop: the next
+        // instruction hook must execute it, not stop on it.
+        if (m68k.pc != before) standingOnNext_ = true;
     }
 }
 

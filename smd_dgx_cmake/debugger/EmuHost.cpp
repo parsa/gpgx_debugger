@@ -44,8 +44,16 @@ bool EmuHost::start(const std::string& romPath)
         ev.pc = pc;
         ev.bpId = backend_.lastStopBreakpoint();
         ev.reason = backend_.lastStopReason();
+        if (ev.reason == StopReason::Exception) ev.exc = backend_.lastException();
         ev.stopSeq = stops_.fetch_add(1) + 1;
         ev.changed = backend_.takeCodemap();
+        emitEvent(ev);
+    });
+    backend_.onException([this](const ExceptionInfo& x) {
+        DebugEvent ev;
+        ev.type = DebugEvent::Type::Exception;
+        ev.pc = x.pc;
+        ev.exc = x;
         emitEvent(ev);
     });
     backend_.onResumed([this] {

@@ -1,7 +1,9 @@
 #include "BridgeServer.h"
 #include "EmuHost.h"
 
+#include <algorithm>
 #include <cerrno>
+#include <cstdlib>
 #include <chrono>
 #include <thread>
 #include <cstdio>
@@ -314,22 +316,21 @@ std::string BridgeServer::handleEvents(Client& c, int max)
         tuples.push_back(d.str());
         c.dropped = 0;
     }
-    static const char* const kNames[] = { "started", "paused", "resumed", "stopped" };
+    static const char* const kNames[] = { "started", "paused", "resumed", "stopped", "exception" };
     while (!c.events.empty() && (int)tuples.size() < max) {
         const QueuedEvent e = c.events.front();
         c.events.pop_front();
         std::ostringstream t;
         t << std::dec << e.seq << ","
-          << (e.type < 4 ? kNames[e.type] : "?") << ","
+          << (e.type < 5 ? kNames[e.type] : "?") << ","
           << std::hex << e.pc << ","
           << (e.cpu ? "z80" : "m68k") << ","
           << std::dec << e.bpId;
-        // Sixth field: the stop reason name ("-" for non-stops).
-        const size_t eq = e.detail.find('=');
-        const size_t sp = e.detail.find(' ');
-        t << "," << (eq == std::string::npos
-                         ? std::string("-")
-                         : e.detail.substr(eq + 1, sp == std::string::npos ? std::string::npos : sp - eq - 1));
+        // Sixth field: the event's description (describeStop) with ';' for
+        // spaces — "reason=halted", "vector=4;name=illegal;..." — or "-".
+        std::string info = e.detail.empty() ? std::string("-") : e.detail;
+        std::replace(info.begin(), info.end(), ' ', ';');
+        t << "," << info;
         tuples.push_back(t.str());
     }
 
@@ -346,7 +347,7 @@ std::string BridgeServer::handleEvents(Client& c, int max)
 // makes "which frame did that happen on?" unanswerable.
 std::string BridgeServer::handleWait(Client& c, int timeoutMs)
 {
-    static const char* const kNames[] = { "started", "paused", "resumed", "stopped" };
+    static const char* const kNames[] = { "started", "paused", "resumed", "stopped", "exception" };
     std::unique_lock<std::mutex> lk(clientsMx_);
 
     QueuedEvent hit{};
@@ -370,7 +371,7 @@ std::string BridgeServer::handleWait(Client& c, int timeoutMs)
     if (!got || hit.seq == 0) return "ok timeout";
 
     std::ostringstream o;
-    o << "ok " << (hit.type < 4 ? kNames[hit.type] : "?")
+    o << "ok " << (hit.type < 5 ? kNames[hit.type] : "?")
       << " pc=" << std::hex << hit.pc
       << " cpu=" << (hit.cpu ? "z80" : "m68k")
       << " bp=" << std::dec << hit.bpId
@@ -737,6 +738,21 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
     // behind its back its UI stays stuck on "suspended" forever. Asking IDA to
     // continue instead means IDA reaches the backend by its own path and its
     // state is right by construction.
+    // Which 68000 exceptions stop the machine (every one is reported as an
+    // event regardless). "catch" alone reports the mask; bit n = vector n.
+    if (cmd == "catch") {
+        static const char* kUsage = "err usage: catch [none|faults|all|<hex-mask>]";
+        const std::string spec = arg();
+        if (!spec.empty()) {
+            uint64_t mask = 0;
+            if (!parseCatchSpec(spec, mask) || !arg().empty()) return kUsage;
+            host_->gpgx()->setExceptionCatch(mask);
+        }
+        std::ostringstream o;
+        o << "ok mask=" << std::hex << host_->gpgx()->exceptionCatch();
+        return o.str();
+    }
+
     if (cmd == "pause") {
         const auto& hm = host_->hostMutations();
         const bool handled = hm.pause && hm.pause();

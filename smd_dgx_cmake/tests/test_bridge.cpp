@@ -559,6 +559,39 @@ TEST(bridge_pause_reaches_a_halted_68000_and_says_why)
     CHECK(s.find(" reason=halted") != std::string::npos);
 }
 
+TEST(bridge_reports_and_catches_exceptions)
+{
+    Wired w(24);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(24)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+
+    CHECK_STR(raw.cmd("catch"), "ok mask=0");
+    CHECK_STR(raw.cmd("catch faults"), "ok mask=cffc");
+    CHECK(raw.cmd("catch zz").rfind("err usage", 0) == 0);
+
+    M68kRegs r = w.emu.backend()->getM68kRegs();
+    r.pc = kIllegalEntry; r.sr = 0x2700; r.a[7] = kInitSp;
+    w.emu.backend()->setM68kRegs(r);
+    CHECK_STR(raw.cmd("resume"), "ok");
+    const std::string s = raw.cmd("wait 2000");
+    CHECK(s.rfind("ok paused", 0) == 0);
+    CHECK(s.find(" reason=exception vector=4 name=illegal fault_pc=000520") != std::string::npos);
+
+    // Not caught: no stop, but the event stream still names it.
+    CHECK_STR(raw.cmd("catch none"), "ok mask=0");
+    r = w.emu.backend()->getM68kRegs();
+    r.pc = kIllegalEntry; r.sr = 0x2700; r.a[7] = kInitSp;
+    w.emu.backend()->setM68kRegs(r);
+    raw.cmd("events 256");                                  // drain
+    CHECK_STR(raw.cmd("resume"), "ok");
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    const std::string ev = raw.cmd("events 16");
+    CHECK(ev.find(",exception,520,m68k,-1,vector=4;name=illegal;") != std::string::npos);
+    CHECK_STR(raw.cmd("pause"), "ok");
+}
+
 TEST(bridge_falls_through_to_the_backend_without_a_host)
 {
     // The standalone app installs nothing, and a host may decline any single

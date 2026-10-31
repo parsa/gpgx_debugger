@@ -85,6 +85,16 @@ public:
     // Which breakpoint caused the current stop, or -1 for a step, an explicit
     // pause, or a stop that no breakpoint explains. Read after a pause event.
     int lastStopBreakpoint() const { return lastBpId_.load(); }
+    // 68000 exceptions. Every one is reported through the callback (on the
+    // emulation thread, before its vector is read); those whose vector bit is
+    // set in the catch mask also stop, with StopReason::Exception, on the
+    // faulting instruction. Bit n = vector n. Interrupts are not reported.
+    using ExceptionCb = std::function<void(const ExceptionInfo&)>;
+    void onException(ExceptionCb cb) { excCb_ = std::move(cb); }
+    void     setExceptionCatch(uint64_t vectors) { excCatch_.store(vectors); }
+    uint64_t exceptionCatch() const { return excCatch_.load(); }
+    ExceptionInfo lastException() const;
+
     // Why the current stop happened. Read after a pause event.
     StopReason lastStopReason() const { return StopReason(lastReason_.load()); }
 
@@ -104,6 +114,7 @@ private:
     void trackCall(uint32_t pc);          // maintain callstack_ from the opcode at pc
     uint16_t opcodeAt(uint32_t pc) const;
     void     onZ80Exec(uint32_t pc);
+    void     onM68kException(unsigned vector);
     void     stepOverZ80();
     void     trackZ80Call(uint16_t pc);
     uint8_t  z80ByteAt(uint16_t pc) const;
@@ -148,6 +159,10 @@ private:
     std::map<uint32_t, uint32_t> codemap_;
 
     ConditionEval condEval_;
+    ExceptionCb   excCb_;
+    std::atomic<uint64_t> excCatch_ {0};
+    mutable std::mutex    excMx_;
+    ExceptionInfo         lastExc_;
     std::mutex            callstackMutex_;
     std::vector<uint32_t> callstack_;
     std::vector<uint32_t> callstackZ80_;

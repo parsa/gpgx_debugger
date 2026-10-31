@@ -47,6 +47,16 @@ inline const char* markerText() { return "SMD-DGX-BYTE-ORDER"; }
 constexpr uint32_t kStopEntry = 0x0500;
 constexpr uint32_t kHaltEntry = 0x0510;
 
+// Exception routines, reached by setting PC (SP must be a sane even address).
+//   0520  4AFC                 illegal
+//   0530  4E40                 trap #0
+//   0540  3038 0001            move.w ($0001).w,d0 ; address error: odd word read
+//   0600  60FE                 bra.s *            ; every exception vector lands here
+constexpr uint32_t kIllegalEntry = 0x0520;
+constexpr uint32_t kTrapEntry    = 0x0530;
+constexpr uint32_t kAddrErrEntry = 0x0540;
+constexpr uint32_t kExcHandler   = 0x0600;
+
 inline void put32be(std::vector<uint8_t>& r, uint32_t at, uint32_t v)
 {
     r[at + 0] = uint8_t(v >> 24); r[at + 1] = uint8_t(v >> 16);
@@ -123,6 +133,14 @@ inline std::vector<uint8_t> buildRom()
     put32be(rom, kHaltEntry + 2, 0x00FFF001);
     put16be(rom, kHaltEntry + 6, 0x3038);      // move.w ($0001).w,d0
     put16be(rom, kHaltEntry + 8, 0x0001);
+
+    // Vectors 2..63 (faults, traps, interrupts) all park in one handler.
+    for (uint32_t v = 2; v < 64; ++v) put32be(rom, v * 4, kExcHandler);
+    put16be(rom, kExcHandler, 0x60FE);         // bra.s *
+    put16be(rom, kIllegalEntry, 0x4AFC);       // illegal
+    put16be(rom, kTrapEntry, 0x4E40);          // trap #0
+    put16be(rom, kAddrErrEntry + 0, 0x3038);   // move.w ($0001).w,d0
+    put16be(rom, kAddrErrEntry + 2, 0x0001);
 
     return rom;
 }
