@@ -225,8 +225,7 @@ void on_emu_event(const DebugEvent& ev)
 //
 // The expression is IDA's (IDC or Python), so IDA must evaluate it — and only
 // on its own thread. We are called from the emulation thread while it is
-// stopped at the breakpoint, so execute_sync is safe here: the emulator is not
-// holding anything IDA needs.
+// stopped at the breakpoint: the emulator is not holding anything IDA needs.
 // ---------------------------------------------------------------------------
 struct eval_cond_req : public exec_request_t {
     uint32_t    elang;
@@ -255,10 +254,15 @@ struct eval_cond_req : public exec_request_t {
     }
 };
 
+bool execute_bridge_ui(exec_request_t& request);
+
 bool evaluate_condition(uint32_t elang, const std::string& expr)
 {
+    // Cancellable like the bridge's requests: exiting the process joins this
+    // (emulation) thread from IDA's thread, which therefore cannot also serve
+    // a condition still waiting for it. Cancelled = stop, as on any failure.
     eval_cond_req req(elang, expr);
-    execute_sync(req, MFF_WRITE);
+    if (!execute_bridge_ui(req)) return true;
     return req.result;
 }
 
