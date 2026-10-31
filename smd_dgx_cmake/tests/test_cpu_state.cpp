@@ -92,6 +92,41 @@ TEST(setting_pc_restarts_a_stopped_68000)
     CHECK_EQ(e.backend()->getM68kRegs().pc, kSubEntry);
 }
 
+// Resuming never stops on the instruction the CPU stands on, whatever kind of
+// stop it resumes from (the usual debugger rule: continue steps over a
+// breakpoint at the current PC). Moving PC onto a breakpoint and continuing
+// therefore runs that instruction, after an in-hook stop and after a
+// between-frame stop alike; the breakpoint fires the next time it is reached.
+TEST(resume_runs_the_standing_instruction_after_any_kind_of_stop)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+
+    Breakpoint bp;
+    bp.type = BpType::PC; bp.start = kJsr; bp.end = kJsr;
+    e.backend()->addBreakpoint(bp);
+    auto resumeFromJsr = [&]() {
+        e.parkM68kAt(kJsr);                              // onto the breakpoint
+        const uint64_t s = e.pauseSeq();
+        e.backend()->resume();
+        REQUIRE(e.waitPause(s));
+        CHECK(e.pauseReason() == StopReason::Breakpoint);
+        CHECK_EQ(e.pausePc(), kJsr);
+        // Reached again through the loop (jsr, sub, nop, bra), not stopped on
+        // the standing instruction: the subroutine ran and returned.
+        CHECK_EQ(e.backend()->getM68kRegs().a[7], kInitSp);
+    };
+    resumeFromJsr();                                     // from an in-hook stop
+
+    e.backend()->clearBreakpoints();
+    runInto(e, kHaltEntry);
+    REQUIRE(e.pauseAndWait(1500));
+    REQUIRE(e.pauseReason() == StopReason::Halted);      // a between-frame stop
+    e.backend()->addBreakpoint(bp);
+    resumeFromJsr();
+}
+
 TEST(ordinary_stops_name_their_reason)
 {
     t::Emu e;

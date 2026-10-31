@@ -581,6 +581,10 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t value)
         lastPc_ = addr;
         ++execCount_;
         trackCall(addr);
+        // Resuming never stops on the instruction the CPU stands on (as with a
+        // stop taken inside this hook, where that instruction just resumes and
+        // a PC moved meanwhile runs without a hook at all): continue steps over
+        // a breakpoint at the current PC. See test_cpu_state.cpp.
         if (standingOnNext_) { standingOnNext_ = false; return; }
         StopReason why = StopReason(pauseReason_.exchange(0));
         if (stepInto_.exchange(false) && why == StopReason::None) why = StopReason::Step;
