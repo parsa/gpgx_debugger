@@ -276,6 +276,7 @@ private:
     std::atomic<bool> framePauseReq_ {false};
     std::atomic<bool> atFrameBoundary_ {false};
     std::atomic<bool> transit_ {false};
+    void invalidatePrefetch();
 
     std::mutex codemapMutex_;
     std::map<uint32_t, uint32_t> codemap_;

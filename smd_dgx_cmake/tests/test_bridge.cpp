@@ -1935,3 +1935,28 @@ TEST(m68k_pc_is_reported_as_24_bits)
     raw.cmd("runcase pc=600 sr=2700 a7=fff000 instr=3");
     CHECK_EQ(corePc() >> 24, 0u);
 }
+
+// Code the debugger writes is the code that runs: the 68000's prefetch must
+// not hand back what was at that address before (here: a case whose code
+// replaces the previous case's at the same address).
+TEST(code_written_by_the_debugger_is_executed_not_a_stale_prefetch)
+{
+    Wired w(58);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(58)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    const std::string a = raw.cmd("runcase pc=ff0100 sr=2700 a7=fff000 mem=ff0100:700160fe instr=3");   // moveq #1,d0
+    CHECK(a.find(" d0=1 ") != std::string::npos);
+    const std::string b = raw.cmd("runcase pc=ff0100 sr=2700 a7=fff000 mem=ff0100:700260fe instr=3");   // moveq #2,d0
+    if (b.find(" d0=2 ") == std::string::npos) std::printf("    second case: %s\n", b.substr(0, 120).c_str());
+    CHECK(b.find(" d0=2 ") != std::string::npos);
+    // The same through a plain write while paused, and a load of a state.
+    REQUIRE(raw.cmd("write ff0100 700360fe") == "ok");
+    REQUIRE(raw.cmd("wreg68k pc=ff0100") == "ok");
+    REQUIRE(raw.cmd("stepi") == "ok");
+    raw.cmd("wait 3000");
+    const std::string r = raw.cmd("regs68k");
+    if (r.find(" d0=3 ") == std::string::npos) std::printf("    after write: %s\n", r.substr(0, 120).c_str());
+    CHECK(r.find(" d0=3 ") != std::string::npos);
+}

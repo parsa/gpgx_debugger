@@ -132,7 +132,7 @@ void GpgxBackend::setM68kRegs(const M68kRegs& r)
     }
     for (int i = 0; i < 8; ++i) m68k_set_reg(static_cast<m68k_register_t>(M68K_REG_D0 + i), r.d[i]);
     for (int i = 0; i < 8; ++i) m68k_set_reg(static_cast<m68k_register_t>(M68K_REG_A0 + i), r.a[i]);
-    if (pcMoved) m68k_set_reg(M68K_REG_PC, r.pc);
+    if (pcMoved) { m68k_set_reg(M68K_REG_PC, r.pc); invalidatePrefetch(); }
     m68k_set_reg(M68K_REG_SR,  r.sr);
     m68k_set_reg(M68K_REG_USP, usp);
     m68k_set_reg(M68K_REG_ISP, isp);
@@ -141,6 +141,7 @@ void GpgxBackend::setM68kRegs(const M68kRegs& r)
 void GpgxBackend::setM68kPcExact(uint32_t pc)
 {
     m68k_set_reg(M68K_REG_PC, pc);
+    invalidatePrefetch();
 }
 
 Z80Regs GpgxBackend::getZ80Regs()
@@ -231,7 +232,16 @@ bool GpgxBackend::writeMemory(uint32_t addr, const uint8_t* data, uint32_t size)
         else if (map->write8) map->write8(a, data[i]);
         else return false;
     }
+    invalidatePrefetch();
     return true;
+}
+
+// The core caches the longword it last fetched instructions from and reuses
+// it while PC stays in it. Whatever the debugger changes (memory, PC, a whole
+// state) must be fetched afresh, or the CPU runs what used to be there.
+void GpgxBackend::invalidatePrefetch()
+{
+    m68k.pref_addr = 0xFFFFFFFFu;     // never equal to a fetch address (low bits clear)
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +269,9 @@ bool GpgxBackend::loadState(const char* path)
     f.seekg(0);
     std::vector<uint8_t> buf(STATE_SIZE, 0);
     if (!f.read(reinterpret_cast<char*>(buf.data()), size)) return false;
-    return state_load(buf.data()) != 0;
+    const bool ok = state_load(buf.data()) != 0;
+    invalidatePrefetch();
+    return ok;
 }
 
 bool GpgxBackend::runSafely(const std::function<void()>& fn)
@@ -417,6 +429,7 @@ bool GpgxBackend::writeRegion(int id, uint32_t off, const uint8_t* data, uint32_
     if (!kRegions[id].writable) return false;
     for (uint32_t i = 0; i < size && off + i < rsize; ++i)
         arr[(off + i) ^ swap] = data[i];
+    invalidatePrefetch();
     return true;
 }
 
