@@ -1248,6 +1248,13 @@ INLINE uint m68ki_init_exception(void)
   /* Save the old status register */
   uint sr = m68ki_get_sr();
 
+#if defined(HOOK_CPU) && defined(M68K_MAIN_CPU_HOOKS)
+  /* From here on the CPU processes an exception, not an instruction: the one
+     that raised it (if any) does not retire. Address errors also get here
+     after unwinding their instruction. */
+  m68k_in_instruction = 0;
+#endif
+
   /* Turn off trace flag, clear pending traces */
   FLAG_T1 = 0;
   m68ki_clear_trace()
@@ -1388,14 +1395,7 @@ INLINE void m68ki_exception_illegal(void)
 /* Exception for address error */
 INLINE void m68ki_exception_address_error(void)
 {
-  uint sr;
-
-#if defined(HOOK_CPU) && defined(M68K_MAIN_CPU_HOOKS)
-  /* The faulting instruction was unwound (longjmp): it is no longer running. */
-  m68k_in_instruction = 0;
-#endif
-
-  sr = m68ki_init_exception();
+  uint sr = m68ki_init_exception();
 
   /* If we were processing a bus error, address error, or reset,
      * this is a catastrophic failure.

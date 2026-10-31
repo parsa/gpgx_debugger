@@ -280,6 +280,33 @@ TEST(instruction_budget_after_a_watchpoint_on_an_address_error_frame)
     CHECK_EQ(e.backend()->getM68kRegs().pc, kExcHandler + 2);
 }
 
+// The same for an exception raised by the instruction itself (illegal): from
+// the moment it starts stacking, the CPU processes an exception.
+TEST(instruction_budget_after_a_watchpoint_on_an_illegal_instruction_frame)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+
+    Breakpoint watch;
+    watch.type = BpType::Write; watch.start = kInitSp - 4; watch.end = kInitSp - 1;   // stacked PC
+    const int id = e.backend()->addBreakpoint(watch);
+    M68kRegs r = e.backend()->getM68kRegs();
+    r.pc = kIllegalEntry; r.sr = 0x2700; r.a[7] = kInitSp;
+    e.backend()->setM68kRegs(r);
+    const uint64_t s = e.pauseSeq();
+    e.backend()->resume();
+    REQUIRE(e.waitPause(s));
+    e.backend()->removeBreakpoint(id);
+    REQUIRE(e.pauseReason() == StopReason::Watchpoint);
+
+    RunLimits budget;
+    budget.maxInstructions = 1;                          // the handler's nop
+    REQUIRE(runAndWait(e, budget));
+    CHECK(e.pauseReason() == StopReason::Budget);
+    CHECK_EQ(e.backend()->getM68kRegs().pc, kExcHandler + 2);
+}
+
 // And when the stop on a caught exception is simply continued: resuming
 // finishes the exception, so the first instruction retired is the handler's.
 TEST(instruction_budget_after_continuing_an_exception_stop)

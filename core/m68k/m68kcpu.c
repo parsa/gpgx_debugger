@@ -242,6 +242,10 @@ void m68k_set_irq(unsigned int int_level)
 /* IRQ latency (Fatal Rewind, Sesame's Street Counting Cafe)*/
 void m68k_set_irq_delay(unsigned int int_level)
 {
+  /* Called from inside the instruction writing the VDP: that instruction is
+     still the one running when this returns (for a debugger, see below). */
+  const int in_instruction = m68k_in_instruction;
+
   /* Prevent reentrance */
   if (!irq_latency)
   {
@@ -277,6 +281,8 @@ void m68k_set_irq_delay(unsigned int int_level)
 
   /* Check interrupt mask to process IRQ  */
   m68ki_check_interrupts(); /* Level triggered (IRQ) */
+
+  m68k_in_instruction = in_instruction;
 }
 
 /* Non-zero while the main 68000 executes an instruction (for a debugger: a
