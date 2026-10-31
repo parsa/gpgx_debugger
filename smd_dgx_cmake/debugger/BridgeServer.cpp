@@ -468,7 +468,19 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
             std::lock_guard<std::mutex> lk(clientsMx_);
             if (!lastStopDetail_.empty()) reply += " " + lastStopDetail_;
         }
+        reply += host_->unpaced() ? " speed=max" : " speed=realtime";
         return reply;
+    }
+
+    // "speed [max|realtime]": max runs frames back to back (batch clients:
+    // recording, replaying cases), realtime at the console's 50/60 Hz, the
+    // default. Only the wall clock changes, never what the machine does.
+    if (cmd == "speed") {
+        const std::string v = arg();
+        if ((!v.empty() && v != "max" && v != "realtime") || !arg().empty())
+            return "err usage: speed [max|realtime]";
+        if (!v.empty()) host_->setUnpaced(v == "max");
+        return host_->unpaced() ? "ok speed=max" : "ok speed=realtime";
     }
 
     if (cmd == "regs68k") {

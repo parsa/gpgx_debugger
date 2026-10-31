@@ -125,7 +125,8 @@ void EmuHost::run(std::string /*romPath*/)
                        bm.viewport.x, bm.viewport.y, bm.viewport.w, bm.viewport.h);
         }
 
-        if (audioSink_ && snd.enabled && snd.blips[0]) {
+        const bool unpaced = unpaced_.load();
+        if (audioSink_ && !unpaced && snd.enabled && snd.blips[0]) {
             static int16_t audioBuf[2048 * 2];   // stereo, gx::SOUND_SAMPLES_SIZE
             const int frames = audio_update(audioBuf);
             if (frames > 0)
@@ -138,7 +139,9 @@ void EmuHost::run(std::string /*romPath*/)
         // behind rather than bursting frames to catch up.
         nextFrame += frameDur;
         const auto now = chr::steady_clock::now();
-        if (nextFrame > now)
+        if (unpaced)
+            nextFrame = now;                  // back to back; re-baseline for realtime
+        else if (nextFrame > now)
             std::this_thread::sleep_until(nextFrame);
         else
             nextFrame = now;

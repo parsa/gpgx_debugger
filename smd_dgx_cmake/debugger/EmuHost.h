@@ -86,6 +86,13 @@ public:
     // Run n more frames, then pause. Zero cancels a pending advance.
     void advanceFrames(int n) { framesLeft_.store(n < 0 ? 0 : n); }
 
+    // Unpaced: run frames back to back instead of at the console's 50/60 Hz.
+    // For batch clients (a recorder, an oracle) that nobody watches; the
+    // machine itself is identical, only the wall clock differs. Audio is not
+    // produced while unpaced: nothing could play it at that rate.
+    void setUnpaced(bool on) { unpaced_.store(on); }
+    bool unpaced() const { return unpaced_.load(); }
+
     // Monotonic counters a client can compare across calls.
     //
     // Without them, "resume then poll until paused" is unsound: the poll can
@@ -165,6 +172,7 @@ private:
     std::atomic<bool> stopFlag_ { false };
     std::atomic<bool> running_  { false };
     std::atomic<int>  framesLeft_ { 0 };   // frame-advance countdown
+    std::atomic<bool> unpaced_ { false };
     std::atomic<uint64_t> stops_  { 0 };
     std::atomic<uint64_t> frames_ { 0 };
     HostMutations     hostMut_;

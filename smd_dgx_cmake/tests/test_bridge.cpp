@@ -1436,3 +1436,53 @@ TEST(armed_run_on_a_z80_bus_wait_ends_on_its_budget)
     CHECK(r.rfind("ok reason=budget", 0) == 0);
     CHECK(msSince(t0) < 2000);
 }
+
+// ---------------------------------------------------------------------------
+// Speed: real time by default (a person is watching), unpaced on request (a
+// batch client is not). Same machine either way: only the wall clock differs.
+// ---------------------------------------------------------------------------
+TEST(speed_max_runs_unpaced_with_identical_results)
+{
+    Wired w(47);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(47)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+
+    CHECK_STR(raw.cmd("speed"), "ok speed=realtime");
+    CHECK(raw.cmd("status").find(" speed=realtime") != std::string::npos);
+    CHECK(raw.cmd("speed warp").rfind("err usage", 0) == 0);
+
+    const char* tmp = std::getenv("TMPDIR");
+    const std::string path = std::string(tmp ? tmp : ".") + "/smd_dgx_speed.state";
+    REQUIRE(raw.cmd("savestate " + path) == "ok");
+    const std::string c = "runcase state=" + path + " pc=218 sr=2700 a7=fff000 frames=60 log=m68k:fff000-ffffff logcap=32";
+
+    auto timedFrames = [&](int n) -> long long {
+        const auto t0 = std::chrono::steady_clock::now();
+        CHECK(raw.cmd("frameadv " + std::to_string(n)) == "ok");
+        CHECK(raw.cmd("wait 10000").find(" reason=frame") != std::string::npos);
+        return msSince(t0);
+    };
+    const long long paced = timedFrames(120);                 // ~2 s at 60 Hz
+    auto t0 = std::chrono::steady_clock::now();
+    const std::string pacedCase = raw.cmd(c);
+    const long long pacedCaseMs = msSince(t0);
+
+    CHECK_STR(raw.cmd("speed max"), "ok speed=max");
+    CHECK(raw.cmd("status").find(" speed=max") != std::string::npos);
+    const long long fast = timedFrames(120);
+    t0 = std::chrono::steady_clock::now();
+    const std::string fastCase = raw.cmd(c);
+    const long long fastCaseMs = msSince(t0);
+    CHECK_STR(raw.cmd("speed realtime"), "ok speed=realtime");
+
+    std::printf("    frameadv 120: %lld ms paced, %lld ms max; runcase: %lld ms paced, %lld ms max\n",
+                paced, fast, pacedCaseMs, fastCaseMs);
+    CHECK(paced >= 1500);
+    CHECK(fast * 4 < paced);                                  // several times faster
+    CHECK(fastCaseMs * 4 < pacedCaseMs);
+    CHECK(pacedCase.rfind("ok reason=budget", 0) == 0);
+    CHECK_STR(fastCase, pacedCase);                           // same registers, diff, log
+    std::remove(path.c_str());
+}
