@@ -795,10 +795,14 @@ void GpgxBackend::watchHit(int bpId, uint32_t pc, Cpu cpu, AccessSpace space, bo
         lastAccess_.address = addr;
         lastAccess_.value   = width >= 4 ? value : value & ((1u << (8 * width)) - 1);
     }
-    // A 68000 access is inside its instruction; a Z80 access may be too, when
-    // a 68000 write synchronised the Z80 (BUSREQ/RESET).
-    stopInInstr_ = cpu == Cpu::M68K || m68kMidInstruction();
-    stopMidInstr_ = stopInInstr_;
+    // Inside a 68000 instruction or not is what the core says, whoever made
+    // the access: a 68000 instruction; a Z80 run that one of its writes
+    // synchronised (BUSREQ/RESET); or neither, e.g. a DMA transfer the
+    // scheduler runs between instructions. A 68000-bus access outside an
+    // instruction is exception processing (stacking a frame), which is just
+    // as unfinished.
+    stopInInstr_ = m68kMidInstruction();
+    stopMidInstr_ = stopInInstr_ || space == AccessSpace::M68k;
     firePause(pc, cpu, bpId, StopReason::Watchpoint);
 }
 

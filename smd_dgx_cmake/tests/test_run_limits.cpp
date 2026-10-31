@@ -209,6 +209,49 @@ TEST(z80_stop_in_its_own_time_slice_is_not_inside_a_68000_instruction)
     CHECK(!e.gpgx()->stopInsideM68kInstruction());
 }
 
+// A 68000-to-VRAM DMA runs line by line from the scheduler, between 68000
+// instructions.
+// A VDP watchpoint hit by it is not inside a 68000 instruction, and a budget
+// armed there counts the next instruction as unretired.
+TEST(vdp_watchpoint_hit_by_dma_is_between_68000_instructions)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+
+    // In work RAM: a 0x1000-word DMA from $FF0000 to VRAM 0 (the command
+    // write starts it), then loop nop; bra.s back to the nop.
+    const uint16_t ctrl[] = { 0x8114, 0x8F02, 0x9300, 0x9410, 0x9500, 0x9680, 0x977F, 0x4000, 0x0080 };
+    std::vector<uint8_t> code;
+    auto w16 = [&](uint16_t v) { code.push_back(uint8_t(v >> 8)); code.push_back(uint8_t(v)); };
+    for (uint16_t c : ctrl) { w16(0x33FC); w16(c); w16(0x00C0); w16(0x0004); }  // move.w #c,$C00004
+    const uint32_t loop = 0xFF0300 + uint32_t(code.size());
+    w16(0x4E71); w16(0x60FC);                                                   // nop; bra.s nop
+    e.backend()->writeMemory(0xFF0300, code.data(), uint32_t(code.size()));
+
+    Breakpoint watch;
+    watch.type = BpType::Write; watch.is_vdp = true; watch.start = 0x1F00; watch.end = 0x1F00;
+    const int id = e.backend()->addBreakpoint(watch);
+    M68kRegs r = e.backend()->getM68kRegs();
+    r.pc = 0xFF0300; r.sr = 0x2700; r.a[7] = kInitSp;
+    e.backend()->setM68kRegs(r);
+    const uint64_t s = e.pauseSeq();
+    e.backend()->resume();
+    REQUIRE(e.waitPause(s));
+    e.backend()->removeBreakpoint(id);
+    REQUIRE(e.pauseReason() == StopReason::Watchpoint);
+    REQUIRE(e.pauseEvent().access.space == AccessSpace::Vdp);
+    CHECK(!e.gpgx()->stopInsideM68kInstruction());
+
+    const uint32_t standing = e.backend()->getM68kRegs().pc;     // the next 68000 instruction
+    REQUIRE(standing == loop || standing == loop + 2);
+    RunLimits budget;
+    budget.maxInstructions = 1;
+    REQUIRE(runAndWait(e, budget));
+    CHECK(e.pauseReason() == StopReason::Budget);
+    CHECK_EQ(e.backend()->getM68kRegs().pc, standing == loop ? loop + 2 : loop);
+}
+
 // And when the stop on a caught exception is simply continued: resuming
 // finishes the exception, so the first instruction retired is the handler's.
 TEST(instruction_budget_after_continuing_an_exception_stop)

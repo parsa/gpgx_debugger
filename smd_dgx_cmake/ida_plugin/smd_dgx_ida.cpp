@@ -105,7 +105,7 @@ const ext_idcfunc_t kStopFunc = { "smd_dgx_stop", idc_smd_dgx_stop, kNoArgs, nul
 error_t idaapi idc_smd_dgx_catch(idc_value_t* argv, idc_value_t* res)
 {
     if (!g_host) { res->set_string("error: no process"); return eOk; }
-    if (argv[0].vtype == VT_STR) {
+    if (argv[0].vtype == VT_STR && argv[0].c_str()[0]) {      // no argument: just report
         uint64_t mask = 0;
         if (!parseCatchSpec(argv[0].c_str(), mask)) {
             res->set_string("error: catch spec is none|faults|all|<hex mask>");
