@@ -260,7 +260,9 @@ void m68k_set_irq_delay(unsigned int int_level)
       m68ki_instr_hook(); /* auto-disable (see m68kcpu.h) */
       REG_PPC = REG_PC;
       REG_IR = m68ki_read_imm_16();
+      m68k_in_instruction = 1;
       m68ki_instruction_jump_table[REG_IR]();
+      m68k_in_instruction = 0;
       m68ki_exception_if_trace() /* auto-disable (see m68kcpu.h) */
       irq_latency = 0;
     }
@@ -276,6 +278,10 @@ void m68k_set_irq_delay(unsigned int int_level)
   /* Check interrupt mask to process IRQ  */
   m68ki_check_interrupts(); /* Level triggered (IRQ) */
 }
+
+/* Non-zero while the main 68000 executes an instruction (for a debugger: a
+   Z80 run synchronised by one of its writes happens inside it). */
+int m68k_in_instruction = 0;
 
 void m68k_instr_callback()
 {
@@ -308,6 +314,7 @@ void m68k_run(unsigned int cycles)
 
   /* Return point for when we have an address error (TODO: use goto) */
   m68ki_set_address_error_trap() /* auto-disable (see m68kcpu.h) */
+  m68k_in_instruction = 0;   /* also when an address error unwound an instruction */
 
 #ifdef LOGERROR
   error("[%d][%d] m68k run to %d cycles (%x), irq mask = %x (%x)\n", v_counter, m68k.cycles, cycles, m68k.pc,FLAG_INT_MASK, CPU_INT_LEVEL);
@@ -341,7 +348,9 @@ void m68k_run(unsigned int cycles)
     }
 
     /* Execute instruction */
+    m68k_in_instruction = 1;
     m68ki_instruction_jump_table[REG_IR]();
+    m68k_in_instruction = 0;
     USE_CYCLES(CYC_INSTRUCTION[REG_IR]);
 
     /* Trace m68k_exception, if necessary */

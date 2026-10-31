@@ -60,6 +60,9 @@ extern "C" {
 #include "cpuhook.h"
 #endif
 
+/* Main 68000 only: non-zero while it executes an instruction (m68kcpu.c). */
+extern int m68k_in_instruction;
+
 /* ======================================================================== */
 /* ==================== ARCHITECTURE-DEPENDANT DEFINES ==================== */
 /* ======================================================================== */

@@ -673,11 +673,11 @@ void GpgxBackend::armRun(const RunLimits& lim)
 }
 
 // Is the 68000 inside an instruction right now (called from a non-68000 hook)?
-// m68k_run executes while cycles < cycle_end; between its time slices, and
-// when stopped, cycles has reached cycle_end.
+// The core flags the execution of each instruction explicitly: a Z80 run
+// that one of its writes synchronised (BUSREQ/RESET) happens inside it.
 bool GpgxBackend::m68kMidInstruction() const
 {
-    return m68k.cycles < m68k.cycle_end;
+    return m68k_in_instruction != 0;
 }
 
 void GpgxBackend::serviceFramePause()

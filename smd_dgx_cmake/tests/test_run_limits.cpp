@@ -195,6 +195,20 @@ TEST(instruction_budget_after_a_z80_stop_inside_a_68000_write)
     CHECK_EQ(e.backend()->getM68kRegs().pc, kZ80BusWait + 0x10);
 }
 
+// A Z80 stop in the Z80's own time slice is between 68000 instructions.
+TEST(z80_stop_in_its_own_time_slice_is_not_inside_a_68000_instruction)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    e.backend()->resume();                               // boot releases the Z80
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    REQUIRE(e.pauseAndWait());
+    e.parkM68kAt(kJsr);                                  // a loop that never touches the Z80
+    REQUIRE(e.stepAndWait(Cpu::Z80));
+    REQUIRE(e.pauseCpu() == Cpu::Z80);
+    CHECK(!e.gpgx()->stopInsideM68kInstruction());
+}
+
 // And when the stop on a caught exception is simply continued: resuming
 // finishes the exception, so the first instruction retired is the handler's.
 TEST(instruction_budget_after_continuing_an_exception_stop)
