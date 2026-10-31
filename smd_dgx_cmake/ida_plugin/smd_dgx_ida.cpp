@@ -511,12 +511,13 @@ void cancel_continue_requests(bool close)
         if (!entry.second->load()) cancel_exec_request(entry.first);
 }
 
+uint64_t begin_run() { return g_host ? g_host->gpgx()->beginRun() : 0; }
+
 // A bridge client runs the machine. Never waits for IDA's main thread.
 bool host_resume()
 {
     if (!g_host) return false;
-    g_sync.run([] { if (g_host) g_host->gpgx()->beginRun(); },
-               [] { if (g_host) g_host->backend()->resume(); });
+    g_sync.run([] { begin_run(); }, [] { if (g_host) g_host->backend()->resume(); });
     return true;
 }
 
@@ -1250,16 +1251,23 @@ ssize_t idaapi debugger_callback(void*, int msgid, va_list va)
     case debugger_t::ev_resume: {
         debug_event_t* event = va_arg(va, debug_event_t*);
         dbg_notification_t req = get_running_notification();
+        const bool run = req == dbg_null || req == dbg_run_to;   // not a step: set_resume_mode did that
+        bool stop = false;
+        switch (event->eid()) {
+        case STEP: case PROCESS_SUSPENDED: case EXCEPTION: case BREAKPOINT: stop = true; break;
+        default: break;
+        }
         // False when a bridge client already ran the machine past the stop IDA
-        // is resuming from: it must not be resumed again from a newer one.
-        const bool drive = g_sync.releaseHold();
+        // is resuming from: it must not be resumed again from a newer one; and
+        // resumeIfEpoch declines if one does so between here and there.
+        uint64_t epoch = 0;
+        const bool drive = g_sync.releaseHold(run && stop ? begin_run : std::function<uint64_t()>(), &epoch);
         switch (event->eid()) {
         case STEP:
         case PROCESS_SUSPENDED:
         case EXCEPTION:
         case BREAKPOINT:
-            if (drive && (req == dbg_null || req == dbg_run_to))
-                if (g_host) g_host->backend()->resume();
+            if (drive && run && g_host) g_host->gpgx()->resumeIfEpoch(epoch);
             break;
         case PROCESS_EXITED:
             break;
@@ -1274,25 +1282,29 @@ ssize_t idaapi debugger_callback(void*, int msgid, va_list va)
         retcode = DRC_OK;
         break;
 
-    case debugger_t::ev_thread_continue:
-        if (g_sync.releaseHold() && g_host) g_host->backend()->resume();
+    case debugger_t::ev_thread_continue: {
+        uint64_t epoch = 0;
+        if (g_sync.releaseHold(begin_run, &epoch) && g_host) g_host->gpgx()->resumeIfEpoch(epoch);
         retcode = DRC_OK;
         break;
+    }
 
     case debugger_t::ev_set_resume_mode: {
         thid_t tid = va_argi(va, thid_t);           (void)tid;
         resume_mode_t resmod = va_argi(va, resume_mode_t);
         if (!g_host) { retcode = DRC_FAILED; break; }
-        // The machine already left the stop IDA would step from (a bridge
-        // client ran it): there is nothing to step. IDA's resume follows and
-        // finds the newer stop queued, if there is one.
-        if (!g_sync.atHeldStop() && (resmod == RESMOD_INTO || resmod == RESMOD_OVER)) {
+        // If the machine already left the stop IDA would step from (a bridge
+        // client ran it), there is nothing to step: IDA's resume follows and
+        // finds the newer stop queued, if there is one. stepIfEpoch declines
+        // the same way if that happens between here and the step.
+        uint64_t epoch = 0;
+        if ((resmod == RESMOD_INTO || resmod == RESMOD_OVER) && !g_sync.releaseHold(begin_run, &epoch)) {
             retcode = DRC_OK;
             break;
         }
         switch (resmod) {
-        case RESMOD_INTO: g_host->backend()->stepInto(Cpu::M68K); retcode = DRC_OK; break;
-        case RESMOD_OVER: g_host->backend()->stepOver(Cpu::M68K); retcode = DRC_OK; break;
+        case RESMOD_INTO: g_host->gpgx()->stepIfEpoch(Cpu::M68K, false, epoch); retcode = DRC_OK; break;
+        case RESMOD_OVER: g_host->gpgx()->stepIfEpoch(Cpu::M68K, true, epoch);  retcode = DRC_OK; break;
         default:          retcode = DRC_FAILED; break;
         }
         break;

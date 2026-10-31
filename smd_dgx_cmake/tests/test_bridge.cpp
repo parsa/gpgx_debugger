@@ -1204,10 +1204,16 @@ struct FakeIda {
         std::lock_guard<std::mutex> lk(mx);
         mainQueue.push_back([this] { if (sync.continueWanted() && suspended) idaContinue(); });
     }
+    // Runs between IDA's decision to drive the machine and the resume itself,
+    // to test that interleaving.
+    std::function<void()> betweenDecisionAndResume;
     void idaContinue()                               // continue_process -> ev_resume
     {
         suspended = false;
-        if (sync.releaseHold()) be->resume();
+        uint64_t epoch = 0;
+        const bool drive = sync.releaseHold([this] { return host->gpgx()->beginRun(); }, &epoch);
+        if (betweenDecisionAndResume) betweenDecisionAndResume();
+        if (drive) host->gpgx()->resumeIfEpoch(epoch);
     }
     // IDA's main thread gets a turn: posted requests, then event processing.
     void freeMainThread()
@@ -1571,5 +1577,39 @@ TEST(a_stop_published_late_is_not_collected_after_the_machine_ran_on)
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     CHECK(ida.suspended);
+    CHECK_EQ(ida.pc, w.emu.backend()->getM68kRegs().pc & 0xFFFFFF);
+}
+
+// IDA's own continue decides to drive the machine, and a bridge client runs it
+// to a newer stop before IDA's resume lands: IDA must not run past that stop.
+TEST(a_host_continue_racing_a_bridge_run_does_not_run_past_the_newer_stop)
+{
+    Wired w(50);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(50)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    FakeIda ida(w.emu.host());
+    REQUIRE(raw.cmd("resume").rfind("ok", 0) == 0);
+    REQUIRE(raw.cmd("pause") == "ok");
+    REQUIRE(raw.cmd("wait 3000").rfind("ok paused", 0) == 0);
+    for (int i = 0; i < 200 && !ida.suspended; ++i) {
+        ida.freeMainThread();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(ida.suspended);                               // IDA holds the stop
+    ida.betweenDecisionAndResume = [&] {
+        REQUIRE(raw.cmd("stepi") == "ok");                // the bridge runs one step...
+        REQUIRE(raw.cmd("wait 3000").find(" reason=step") != std::string::npos);
+    };
+    ida.idaContinue();                                    // ...then IDA's resume lands
+    ida.betweenDecisionAndResume = nullptr;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    CHECK(w.emu.backend()->isPaused());                   // still at the step's stop
+    for (int i = 0; i < 200 && !ida.suspended; ++i) {
+        ida.freeMainThread();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(ida.suspended);                                 // and IDA learns of it
     CHECK_EQ(ida.pc, w.emu.backend()->getM68kRegs().pc & 0xFFFFFF);
 }

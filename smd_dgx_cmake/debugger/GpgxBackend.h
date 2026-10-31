@@ -81,7 +81,12 @@ public:
     // Run epochs: every resume (and beginRun) starts a new one, and each stop
     // records the epoch it ended. A stop whose epoch is no longer current has
     // been run past: a host that has not collected it yet must not.
-    void     beginRun() { runEpoch_.fetch_add(1); }
+    uint64_t beginRun() { return runEpoch_.fetch_add(1) + 1; }
+    // Resume (or step) only if no other run began since `epoch` (from
+    // beginRun): a host that decided to resume must not run the machine past
+    // a stop a bridge client reached meanwhile. False: nothing done.
+    bool resumeIfEpoch(uint64_t epoch);
+    bool stepIfEpoch(Cpu cpu, bool over, uint64_t epoch);
     uint64_t runEpoch() const { return runEpoch_.load(); }
     uint64_t lastStopEpoch() const { return stopEpoch_.load(); }
 

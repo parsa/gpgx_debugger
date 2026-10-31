@@ -69,11 +69,17 @@ public:
     // The host resumed (continue, step, thread continue). True when the machine
     // still stands where the host stopped, so the host's resume should drive
     // it; false when a bridge client already ran it on.
-    bool releaseHold()
+    //
+    // To drive it, pass beginRun: the new run epoch is taken under the lock, so
+    // a bridge run cannot slip in between this decision and the host's resume
+    // unnoticed; resume with GpgxBackend::resumeIfEpoch(*epoch), which declines
+    // if a bridge client ran the machine (to a newer stop) in the meantime.
+    bool releaseHold(const std::function<uint64_t()>& beginRun = {}, uint64_t* epoch = nullptr)
     {
         std::lock_guard<std::mutex> lk(mx_);
         const bool drive = !held_ || !movedOn_;
         held_ = movedOn_ = continueWanted_ = false;
+        if (drive && beginRun && epoch) *epoch = beginRun();
         return drive;
     }
 

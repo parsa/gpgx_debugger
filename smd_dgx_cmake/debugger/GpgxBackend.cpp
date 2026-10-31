@@ -583,6 +583,29 @@ void GpgxBackend::armStepInto(Cpu cpu)
     if (cpu == Cpu::Z80) stepIntoZ80_.store(true);
     else                 stepInto_.store(true);
 }
+bool GpgxBackend::resumeIfEpoch(uint64_t epoch)
+{
+    {
+        std::lock_guard<std::mutex> lk(reqMx_);
+        if (runEpoch_.load() != epoch) return false;
+        paused_.store(false);
+    }
+    if (resumeCb_) resumeCb_();
+    return true;
+}
+
+bool GpgxBackend::stepIfEpoch(Cpu cpu, bool over, uint64_t epoch)
+{
+    {
+        std::lock_guard<std::mutex> lk(reqMx_);
+        if (runEpoch_.load() != epoch) return false;
+        if (over) armStepOver(cpu); else armStepInto(cpu);
+        paused_.store(false);
+    }
+    if (resumeCb_) resumeCb_();
+    return true;
+}
+
 void GpgxBackend::stepInto(Cpu cpu)
 {
     armStepInto(cpu);
@@ -996,12 +1019,12 @@ void GpgxBackend::firePause(uint32_t pc, Cpu cpu, int bpId, StopReason why)
     if (abandoned_.load()) return;      // shutting down: do not park the thread
     lastBpId_.store(bpId);
     lastReason_.store(uint8_t(why));
-    stopEpoch_.store(runEpoch_.load());
     {
         // This stop answers every request still pending — a pause, a step, a
         // frame-boundary pause — whichever of them it was meant for. Left
         // armed, one would stop some later, unrelated run.
         std::lock_guard<std::mutex> lk(reqMx_);
+        stopEpoch_.store(runEpoch_.load());
         paused_.store(true);
         cancelRunRequests();
     }
