@@ -43,6 +43,7 @@ bool EmuHost::start(const std::string& romPath)
         ev.cpu = cpu;
         ev.pc = pc;
         ev.bpId = backend_.lastStopBreakpoint();
+        ev.reason = backend_.lastStopReason();
         ev.stopSeq = stops_.fetch_add(1) + 1;
         ev.changed = backend_.takeCodemap();
         emitEvent(ev);
@@ -94,12 +95,15 @@ void EmuHost::run(std::string /*romPath*/)
 
         system_frame_gen(0);      // one field/frame; blocks in firePause on bp
         frames_.fetch_add(1);
+        // A halted or STOPped 68000 ran no instruction this frame, so a pause
+        // or step request is still pending: deliver it here instead.
+        backend_.serviceStoppedCpu();
 
         // Frame advance: run exactly N frames, then stop. An agent cannot
         // time an input by sleeping — while it is being debugged the
         // emulator is not bound to the wall clock at all.
         if (framesLeft_.load() > 0 && framesLeft_.fetch_sub(1) == 1)
-            backend_.pause();
+            backend_.requestPause(StopReason::FrameAdvance);
 
         if (frameSink_) {
             const t_bitmap& bm = ::bitmap;

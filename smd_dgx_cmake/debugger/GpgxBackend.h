@@ -85,9 +85,19 @@ public:
     // Which breakpoint caused the current stop, or -1 for a step, an explicit
     // pause, or a stop that no breakpoint explains. Read after a pause event.
     int lastStopBreakpoint() const { return lastBpId_.load(); }
+    // Why the current stop happened. Read after a pause event.
+    StopReason lastStopReason() const { return StopReason(lastReason_.load()); }
+
+    // Pause at the next opportunity, reporting `why` (pause() = Pause).
+    void requestPause(StopReason why);
+
+    // Called by the host between frames. A 68000 that is halted or waiting in
+    // STOP executes no instructions, so a pause or step request would never
+    // reach the instruction hook; this delivers it as a Halted/Stopped stop.
+    void serviceStoppedCpu();
 
 private:
-    void firePause(uint32_t pc, Cpu cpu = Cpu::M68K, int bpId = -1);
+    void firePause(uint32_t pc, Cpu cpu, int bpId, StopReason why);
     // width = bytes touched by the access, so a breakpoint inside a word or
     // longword access still matches.
     int  matchBreakpoint(int type, uint32_t addr, int width = 1);   // id, or -1
@@ -106,7 +116,9 @@ private:
     std::atomic<bool> running_  {false};
     std::atomic<bool> paused_   {false};
     std::atomic<bool> abandoned_{false};   // shutting down: never park again
-    std::atomic<int>  lastBpId_ {-1};      // reason for the current stop
+    std::atomic<int>  lastBpId_ {-1};      // breakpoint behind the current stop
+    std::atomic<uint8_t> lastReason_ {0};  // StopReason of the current stop
+    std::atomic<uint8_t> pauseReason_ {0}; // pending pause request (StopReason), 0 = none
     std::atomic<bool> stepInto_ {false};
     std::atomic<int>  stepOverAddr_ {-1};
     // The Z80 needs its own: it retires thousands of instructions per frame,
@@ -124,6 +136,13 @@ private:
     std::atomic<int> bpCount_ {0};
     int nextBpId_ = 1;
     uint32_t lastPc_ = 0;
+    // 68000 instructions retired (emulation thread only), and the count at the
+    // previous frame end: equal means the CPU executed nothing for a frame.
+    uint64_t execCount_ = 0;
+    uint64_t execCountAtFrame_ = 0;
+    // Set by a stop delivered between frames: the next instruction hook is the
+    // instruction the CPU is standing on, and must execute rather than stop.
+    bool standingOnNext_ = false;
 
     std::mutex codemapMutex_;
     std::map<uint32_t, uint32_t> codemap_;

@@ -289,11 +289,15 @@ gone:
 void BridgeServer::onEmuEvent(const void* evp)
 {
     const DebugEvent& ev = *static_cast<const DebugEvent*>(evp);
+    // Appended to existing replies, so older clients that read only the
+    // leading fields are unaffected.
+    const std::string detail = describeStop(ev);
     std::lock_guard<std::mutex> lk(clientsMx_);
     const uint64_t seq = nextSeq_++;
+    if (ev.type == DebugEvent::Type::Paused) lastStopDetail_ = detail;
     for (auto& c : clients_) {
         if (c->events.size() >= 256) { c->events.pop_front(); ++c->dropped; }
-        c->events.push_back(QueuedEvent{ seq, uint8_t(ev.type), uint8_t(ev.cpu), ev.pc, ev.bpId });
+        c->events.push_back(QueuedEvent{ seq, uint8_t(ev.type), uint8_t(ev.cpu), ev.pc, ev.bpId, detail });
     }
     eventCv_.notify_all();
 }
@@ -320,6 +324,12 @@ std::string BridgeServer::handleEvents(Client& c, int max)
           << std::hex << e.pc << ","
           << (e.cpu ? "z80" : "m68k") << ","
           << std::dec << e.bpId;
+        // Sixth field: the stop reason name ("-" for non-stops).
+        const size_t eq = e.detail.find('=');
+        const size_t sp = e.detail.find(' ');
+        t << "," << (eq == std::string::npos
+                         ? std::string("-")
+                         : e.detail.substr(eq + 1, sp == std::string::npos ? std::string::npos : sp - eq - 1));
         tuples.push_back(t.str());
     }
 
@@ -365,6 +375,7 @@ std::string BridgeServer::handleWait(Client& c, int timeoutMs)
       << " cpu=" << (hit.cpu ? "z80" : "m68k")
       << " bp=" << std::dec << hit.bpId
       << " seq=" << hit.seq;
+    if (!hit.detail.empty()) o << " " << hit.detail;
     return o.str();
 }
 
@@ -406,7 +417,13 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
                       be->getM68kRegs().pc & 0xFFFFFF,
                       (unsigned long long)host_->stopCount(),
                       (unsigned long long)host_->frameCount());
-        return out;
+        std::string reply = out;
+        // The last stop's description, while paused: why it is standing here.
+        if (be->isPaused()) {
+            std::lock_guard<std::mutex> lk(clientsMx_);
+            if (!lastStopDetail_.empty()) reply += " " + lastStopDetail_;
+        }
+        return reply;
     }
 
     if (cmd == "regs68k") {

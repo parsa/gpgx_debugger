@@ -82,6 +82,21 @@ struct EventList {
 EventList g_events;
 EmuHost*  g_host = nullptr;
 
+// Why the process last stopped, in the bridge's key=value format (see
+// describeStop). IDA has no event field for it, so scripts read it with the
+// IDC function smd_dgx_stop(). Written on the emulation thread.
+std::mutex  g_stopMx;
+std::string g_lastStop;
+
+error_t idaapi idc_smd_dgx_stop(idc_value_t*, idc_value_t* res)
+{
+    std::lock_guard<std::mutex> lock(g_stopMx);
+    res->set_string(g_lastStop.c_str());
+    return eOk;
+}
+const char kNoArgs[] = { 0 };
+const ext_idcfunc_t kStopFunc = { "smd_dgx_stop", idc_smd_dgx_stop, kNoArgs, nullptr, 0, 0 };
+
 // Backend breakpoint identity (type,start,end,is_vdp): IDA's update_bpts
 // names breakpoints by address/type, the backend by id.
 struct BpKey {
@@ -204,6 +219,19 @@ void on_emu_event(const DebugEvent& ev)
         // letting the last buffers drone on.
         if (g_audio) g_audio->pause(true);
         apply_codemap(ev.changed);
+        {
+            const std::string why = describeStop(ev);
+            {
+                std::lock_guard<std::mutex> lock(g_stopMx);
+                g_lastStop = why;
+            }
+            // A CPU that runs nothing is worth saying out loud: it is why a
+            // routine never returned.
+            if (ev.reason == StopReason::Halted || ev.reason == StopReason::Stopped)
+                msg(PLUGIN_NAME ": 68000 %s at %06X (%s)\n",
+                    ev.reason == StopReason::Halted ? "halted (double fault)" : "stopped (STOP/wait)",
+                    unsigned(ev.pc & 0xFFFFFF), why.c_str());
+        }
         ida_ev.set_eid(PROCESS_SUSPENDED);
         ida_ev.ea = ev.pc;
         g_events.enqueue(ida_ev);
@@ -1331,6 +1359,7 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
     {
         hook_event_listener(HT_IDD, this);
         hook_event_listener(HT_DBG, &bpt_listener);
+        add_idc_func(kStopFunc);
         dbg = &debugger;
 #ifdef SMD_DGX_IDA_VIEWS
         if (is_idaq()) smd_dgx_register_views();
@@ -1345,6 +1374,7 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
     {
         if (g_bridge) g_bridge->requestStop();
         cancel_bridge_ui_requests();
+        del_idc_func(kStopFunc.name);
 #ifdef SMD_DGX_IDA_VIEWS
         if (is_idaq()) smd_dgx_unregister_views();
 #endif

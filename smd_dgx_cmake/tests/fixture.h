@@ -31,6 +31,7 @@ public:
                 paused_ = true;
                 pausePc_ = ev.pc;
                 pauseCpu_ = ev.cpu;
+                pauseEvent_ = ev;
                 ++pauseSeq_;
             } else if (ev.type == DebugEvent::Type::Resumed) {
                 paused_ = false;
@@ -56,6 +57,9 @@ public:
     uint64_t pauseSeq() { std::lock_guard<std::mutex> lk(mx_); return pauseSeq_; }
     uint32_t pausePc()  { std::lock_guard<std::mutex> lk(mx_); return pausePc_; }
     Cpu      pauseCpu() { std::lock_guard<std::mutex> lk(mx_); return pauseCpu_; }
+    // The whole last Paused event: reason, breakpoint, exception, access.
+    DebugEvent pauseEvent() { std::lock_guard<std::mutex> lk(mx_); return pauseEvent_; }
+    StopReason pauseReason() { return pauseEvent().reason; }
 
     bool pauseAndWait(int ms = 5000)
     {
@@ -97,6 +101,7 @@ private:
     bool     paused_   = false;
     uint32_t pausePc_  = 0;
     Cpu      pauseCpu_ = Cpu::M68K;
+    DebugEvent pauseEvent_;
     uint64_t pauseSeq_ = 0;
 };
 

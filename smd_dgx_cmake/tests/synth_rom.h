@@ -39,6 +39,14 @@ constexpr uint32_t kDataValue = 0x12345678;
 constexpr uint32_t kMarkerAddr = 0x0400;
 inline const char* markerText() { return "SMD-DGX-BYTE-ORDER"; }
 
+// CPU-state routines, reached by setting PC.
+//   0500  4E72 2700            stop #$2700        ; all interrupts masked: stays stopped
+//   0510  2E7C 00FF F001       movea.l #$FFF001,a7 ; odd stack pointer
+//   0516  3038 0001            move.w ($0001).w,d0 ; address error -> stacking to an odd
+//                                                  ; SP faults again -> the 68000 halts
+constexpr uint32_t kStopEntry = 0x0500;
+constexpr uint32_t kHaltEntry = 0x0510;
+
 inline void put32be(std::vector<uint8_t>& r, uint32_t at, uint32_t v)
 {
     r[at + 0] = uint8_t(v >> 24); r[at + 1] = uint8_t(v >> 16);
@@ -108,6 +116,13 @@ inline std::vector<uint8_t> buildRom()
 
     const char* m = markerText();
     for (uint32_t i = 0; m[i]; ++i) rom[kMarkerAddr + i] = uint8_t(m[i]);
+
+    put16be(rom, kStopEntry + 0, 0x4E72);      // stop #$2700
+    put16be(rom, kStopEntry + 2, 0x2700);
+    put16be(rom, kHaltEntry + 0, 0x2E7C);      // movea.l #$00FFF001,a7
+    put32be(rom, kHaltEntry + 2, 0x00FFF001);
+    put16be(rom, kHaltEntry + 6, 0x3038);      // move.w ($0001).w,d0
+    put16be(rom, kHaltEntry + 8, 0x0001);
 
     return rom;
 }

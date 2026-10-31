@@ -59,9 +59,21 @@ struct DebugEvent {
     Cpu      cpu = Cpu::M68K;   // which processor stopped
     uint32_t pc  = 0;
     int      bpId = -1;         // breakpoint that caused it, or -1
+    StopReason reason = StopReason::None;   // Paused: why
     uint64_t stopSeq = 0;       // monotonic; distinguishes a new stop from a seen one
     std::map<uint32_t, uint32_t> changed;   // executed pc -> predecessor pc
 };
+
+// A Paused event's cause as space-separated key=value pairs, starting with
+// "reason=<name>". The same text is appended to bridge replies and returned by
+// IDA's smd_dgx_stop(), so every client parses one format.
+inline std::string describeStop(const DebugEvent& ev)
+{
+    if (ev.type != DebugEvent::Type::Paused) return {};
+    std::string s = "reason=";
+    s += stopReasonName(ev.reason);
+    return s;
+}
 
 // Bidirectional transport endpoint. The emulator side sends events and
 // receives commands; the client side (UI / IDA) does the reverse.

@@ -58,6 +58,7 @@ private:
         uint8_t  cpu;       // Cpu
         uint32_t pc;
         int32_t  bpId;      // which breakpoint, or -1
+        std::string detail; // stop description: "reason=<name> ..." (Paused only)
     };
 
     struct Client {
@@ -93,4 +94,5 @@ private:
     std::vector<std::shared_ptr<Client>>  clients_;
     std::vector<std::thread>              clientThreads_;
     uint64_t                              nextSeq_ = 1;
+    std::string                           lastStopDetail_;   // guarded by clientsMx_
 };

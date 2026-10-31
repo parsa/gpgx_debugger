@@ -27,6 +27,14 @@ extern "C" {
 
 GpgxBackend* g_gpgxBackend = nullptr;
 
+// m68k.stopped bits and run mode (core/m68k/m68kcpu.h STOP_LEVEL_*,
+// RUN_MODE_NORMAL, INSTRUCTION_YES; that header is private to the core).
+// Pinned by the halted/stopped tests in test_cpu_state.cpp.
+namespace {
+constexpr unsigned kStopLevelStop = 1, kStopLevelHalt = 2, kStopLevelWait = 4;
+constexpr unsigned kRunModeNormal = 0, kInstructionYes = 0;
+}
+
 static void cpuHookShim(hook_type_t type, int width, unsigned int addr, unsigned int value)
 {
     if (g_gpgxBackend)
@@ -88,6 +96,14 @@ void GpgxBackend::setM68kRegs(const M68kRegs& r)
     if (r.a[7] != m68k_get_reg(M68K_REG_A7)) {
         if (r.sr & 0x2000) isp = r.a[7];
         else usp = r.a[7];
+    }
+    // Moving PC restarts the CPU there. A halt (double fault) or a STOP would
+    // otherwise outlive it and the CPU would never run again; likewise an
+    // unfinished bus/address-error frame would turn the next fault into a halt.
+    if ((r.pc & 0xFFFFFF) != (m68k_get_reg(M68K_REG_PC) & 0xFFFFFF)) {
+        m68k.stopped &= ~(kStopLevelStop | kStopLevelHalt);
+        m68k.run_mode = kRunModeNormal;
+        m68k.instr_mode = kInstructionYes;
     }
     for (int i = 0; i < 8; ++i) m68k_set_reg(static_cast<m68k_register_t>(M68K_REG_D0 + i), r.d[i]);
     for (int i = 0; i < 8; ++i) m68k_set_reg(static_cast<m68k_register_t>(M68K_REG_A0 + i), r.a[i]);
@@ -427,7 +443,28 @@ std::vector<Breakpoint> GpgxBackend::getBreakpoints() { std::lock_guard<std::mut
 // ---------------------------------------------------------------------------
 // Control
 // ---------------------------------------------------------------------------
-void GpgxBackend::pause()   { stepInto_.store(true); }
+void GpgxBackend::pause()   { requestPause(StopReason::Pause); }
+void GpgxBackend::requestPause(StopReason why) { pauseReason_.store(uint8_t(why)); }
+
+void GpgxBackend::serviceStoppedCpu()
+{
+    // Only a request the instruction hook could not deliver: the CPU retired no
+    // instruction during a whole frame. A STOP that a VBlank will end is left
+    // alone, so stepping through it still lands in the interrupt handler.
+    const bool idleFrame = execCount_ == execCountAtFrame_;
+    execCountAtFrame_ = execCount_;
+    const unsigned stopped = m68k.stopped;
+    if (!idleFrame || !(stopped & (kStopLevelStop | kStopLevelHalt | kStopLevelWait))) return;
+    const bool step = stepInto_.load();
+    if (!pauseReason_.load() && !step) return;
+    pauseReason_.store(0);
+    stepInto_.store(false);
+    // This stop is not inside an instruction hook, so the next hook is the
+    // instruction we are standing on, not the one after it: let it run.
+    standingOnNext_ = true;
+    firePause(m68k_get_reg(M68K_REG_PC), Cpu::M68K, -1,
+              (stopped & kStopLevelHalt) ? StopReason::Halted : StopReason::Stopped);
+}
 void GpgxBackend::resume()  { paused_.store(false); if (resumeCb_) resumeCb_(); }
 void GpgxBackend::stepInto(Cpu cpu)
 {
@@ -504,6 +541,8 @@ bool GpgxBackend::loadRom(const char* path)
 
     { std::lock_guard<std::mutex> lk(callstackMutex_); callstack_.clear(); callstackZ80_.clear(); }
     abandoned_.store(false);        // a previous shutdown must not mute this run
+    standingOnNext_ = false;
+    execCount_ = execCountAtFrame_ = 0;
 
     bool ok = gx::load_rom(path);
     if (ok) running_.store(true);
@@ -522,15 +561,24 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t /*value
             codemap_[addr] = lastPc_;
         }
         lastPc_ = addr;
+        ++execCount_;
         trackCall(addr);
-        bool brk = stepInto_.exchange(false);
-        if (!brk) { int so = stepOverAddr_.load(); if (so >= 0 && (uint32_t)so == addr) { stepOverAddr_.store(-1); brk = true; } }
+        if (standingOnNext_) { standingOnNext_ = false; return; }
+        StopReason why = StopReason(pauseReason_.exchange(0));
+        if (stepInto_.exchange(false) && why == StopReason::None) why = StopReason::Step;
+        if (why == StopReason::None) {
+            int so = stepOverAddr_.load();
+            if (so >= 0 && (uint32_t)so == addr) { stepOverAddr_.store(-1); why = StopReason::Step; }
+        }
         int hit = -1;
-        if (!brk) { hit = matchBreakpoint(type, addr, 2); brk = hit >= 0; }  // opcode word
-        if (brk) firePause(addr, Cpu::M68K, hit);
+        if (why == StopReason::None) {
+            hit = matchBreakpoint(type, addr, 2);                       // opcode word
+            if (hit >= 0) why = StopReason::Breakpoint;
+        }
+        if (why != StopReason::None) firePause(addr, Cpu::M68K, hit, why);
     } else if (type & (HOOK_M68K_R | HOOK_M68K_W)) {
         const int hit = matchBreakpoint(type, addr, width);
-        if (hit >= 0) firePause(lastPc_, Cpu::M68K, hit);
+        if (hit >= 0) firePause(lastPc_, Cpu::M68K, hit, StopReason::Watchpoint);
     } else if (type & HOOK_Z80_E) {
         onZ80Exec(addr & 0xFFFF);
     } else if (type & (HOOK_Z80_R | HOOK_Z80_W)) {
@@ -538,7 +586,7 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t /*value
         // its work RAM is a Z80 event, and stopping at a 68000 address would
         // point the user at code that has nothing to do with it.
         const int hit = matchBreakpoint(type, addr & 0xFFFF, width);
-        if (hit >= 0) firePause(lastPcZ80_, Cpu::Z80, hit);
+        if (hit >= 0) firePause(lastPcZ80_, Cpu::Z80, hit, StopReason::Watchpoint);
     } else if (type & (HOOK_VRAM_R | HOOK_VRAM_W | HOOK_CRAM_R | HOOK_CRAM_W |
                        HOOK_VSRAM_R | HOOK_VSRAM_W)) {
         // The core reports an offset within one VDP memory; breakpoints live in
@@ -547,7 +595,7 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t /*value
         if (type & (HOOK_CRAM_R  | HOOK_CRAM_W))  linear += VDP_BP_CRAM;
         else if (type & (HOOK_VSRAM_R | HOOK_VSRAM_W)) linear += VDP_BP_VSRAM;
         const int hit = matchBreakpoint(type, linear, width);
-        if (hit >= 0) firePause(lastPc_, Cpu::M68K, hit);
+        if (hit >= 0) firePause(lastPc_, Cpu::M68K, hit, StopReason::Watchpoint);
     }
 }
 
@@ -562,6 +610,7 @@ std::map<uint32_t, uint32_t> GpgxBackend::takeCodemap()
 void GpgxBackend::abortRunControl()
 {
     abandoned_.store(true);
+    pauseReason_.store(0);
     stepInto_.store(false);
     stepIntoZ80_.store(false);
     stepOverAddr_.store(-1);
@@ -569,10 +618,11 @@ void GpgxBackend::abortRunControl()
     resume();
 }
 
-void GpgxBackend::firePause(uint32_t pc, Cpu cpu, int bpId)
+void GpgxBackend::firePause(uint32_t pc, Cpu cpu, int bpId, StopReason why)
 {
     if (abandoned_.load()) return;      // shutting down: do not park the thread
     lastBpId_.store(bpId);
+    lastReason_.store(uint8_t(why));
     paused_.store(true);
     if (pauseCb_) pauseCb_(pc, cpu);
     // Block the emulation thread until resumed. While blocked, pump host
@@ -758,7 +808,7 @@ void GpgxBackend::onZ80Exec(uint32_t pc)
     if (!brk) { hit = matchBreakpoint(HOOK_Z80_E, pc); brk = hit >= 0; }
     if (brk) {
         z80ResumeSkip_.store(int(pc));
-        firePause(pc, Cpu::Z80, hit);
+        firePause(pc, Cpu::Z80, hit, hit >= 0 ? StopReason::Breakpoint : StopReason::Step);
     }
 }
 

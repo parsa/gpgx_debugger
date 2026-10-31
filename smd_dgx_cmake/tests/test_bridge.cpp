@@ -539,6 +539,26 @@ TEST(bridge_reports_a_breakpoint_the_host_could_not_delete)
     w.emu.host()->setHostMutations({});
 }
 
+TEST(bridge_pause_reaches_a_halted_68000_and_says_why)
+{
+    Wired w(23);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(23)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+
+    w.emu.parkM68kAt(kHaltEntry);
+    w.emu.backend()->resume();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    CHECK_STR(raw.cmd("pause"), "ok");
+    const std::string r = raw.cmd("wait 2000");
+    CHECK(r.rfind("ok paused", 0) == 0);
+    CHECK(r.find(" reason=halted") != std::string::npos);
+    const std::string s = raw.cmd("status");
+    CHECK(s.find("paused=1") != std::string::npos);
+    CHECK(s.find(" reason=halted") != std::string::npos);
+}
+
 TEST(bridge_falls_through_to_the_backend_without_a_host)
 {
     // The standalone app installs nothing, and a host may decline any single

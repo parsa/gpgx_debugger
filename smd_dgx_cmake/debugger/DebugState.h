@@ -125,6 +125,41 @@ enum class BpType : uint8_t { PC = 1, Read = 2, Write = 3 };
 // the 68000 — swallows every step and matches every address.
 enum class Cpu : uint8_t { M68K = 0, Z80 = 1 };
 
+// Why the machine stopped. Every pause carries exactly one.
+enum class StopReason : uint8_t {
+    None = 0,
+    Breakpoint,     // execute breakpoint (bpId)
+    Watchpoint,     // read/write breakpoint (bpId, access)
+    Step,           // step into / step over completed
+    Pause,          // explicit pause request
+    Exception,      // a 68000 exception was raised (exception)
+    Halted,         // 68000 halted (double bus/address fault): runs no instructions
+    Stopped,        // 68000 waiting in STOP (or a bus wait): runs no instructions
+    FrameAdvance,   // the requested number of frames ran
+    RunToReturn,    // the routine returned to its caller
+    StopAddress,    // a run-to address was reached
+    Budget,         // an instruction or frame budget ran out
+};
+
+// Stable lower-case names, used verbatim on the bridge ("reason=halted").
+inline const char* stopReasonName(StopReason r)
+{
+    switch (r) {
+    case StopReason::Breakpoint:   return "breakpoint";
+    case StopReason::Watchpoint:   return "watchpoint";
+    case StopReason::Step:         return "step";
+    case StopReason::Pause:        return "pause";
+    case StopReason::Exception:    return "exception";
+    case StopReason::Halted:       return "halted";
+    case StopReason::Stopped:      return "stopped";
+    case StopReason::FrameAdvance: return "frame";
+    case StopReason::RunToReturn:  return "return";
+    case StopReason::StopAddress:  return "address";
+    case StopReason::Budget:       return "budget";
+    default:                       return "none";
+    }
+}
+
 struct Breakpoint {
     int      id      = 0;
     BpType   type    = BpType::PC;
