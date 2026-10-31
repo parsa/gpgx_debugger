@@ -512,6 +512,33 @@ TEST(bridge_routes_mutations_through_the_host_when_one_is_installed)
     w.emu.host()->setHostMutations({});
 }
 
+TEST(bridge_reports_a_breakpoint_the_host_could_not_delete)
+{
+    // IDA may refuse to delete its breakpoint; the backend copy then stays,
+    // and the client must not be told "ok".
+    Wired w(22);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(22)));
+
+    Breakpoint bp;
+    bp.type = BpType::PC; bp.start = kSubEntry; bp.end = kSubEntry;
+    const int id = w.emu.backend()->addBreakpoint(bp);
+    REQUIRE(id > 0);
+
+    EmuHost::HostMutations hm;
+    hm.removeBreakpoint = [](int) { return true; };   // handled, but kept
+    w.emu.host()->setHostMutations(hm);
+    CHECK_STR(raw.cmd("bpdel " + std::to_string(id)), "err not deleted");
+    CHECK_EQ(w.emu.backend()->getBreakpoints().size(), size_t(1));
+
+    hm.removeBreakpoint = [&](int i) { w.emu.backend()->removeBreakpoint(i); return true; };
+    w.emu.host()->setHostMutations(hm);
+    CHECK_STR(raw.cmd("bpdel " + std::to_string(id)), "ok");
+    CHECK(w.emu.backend()->getBreakpoints().empty());
+    w.emu.host()->setHostMutations({});
+}
+
 TEST(bridge_falls_through_to_the_backend_without_a_host)
 {
     // The standalone app installs nothing, and a host may decline any single

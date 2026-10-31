@@ -73,6 +73,7 @@ public:
 
     int  addBreakpoint(const Breakpoint&) override;
     void removeBreakpoint(int id) override;
+    bool updateBreakpoint(const Breakpoint&) override;
     void clearBreakpoints() override;
     std::vector<Breakpoint> getBreakpoints() override;
 

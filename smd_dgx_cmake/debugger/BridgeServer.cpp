@@ -856,6 +856,9 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         const bool handled = hm.removeBreakpoint && hm.removeBreakpoint(id);
         if (stopFlag_.load()) return "err stopping";
         if (!handled) be->removeBreakpoint(id);
+        // The host may refuse (IDA keeps the breakpoint): say so, not "ok".
+        for (const auto& b : be->getBreakpoints())
+            if (b.id == id) return "err not deleted";
         return "ok";
     }
 

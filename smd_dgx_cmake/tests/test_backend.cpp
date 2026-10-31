@@ -236,6 +236,65 @@ TEST(m68k_execution_breakpoint_fires_at_the_address)
     CHECK(e.backend()->getBreakpoints().empty());
 }
 
+// A debugger edits a breakpoint (condition, enabled) without changing which
+// breakpoint it is: clients hold on to its id.
+TEST(m68k_breakpoint_update_keeps_its_id)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+
+    Breakpoint bp;
+    bp.type = BpType::PC; bp.cpu = Cpu::M68K;
+    bp.start = kSubEntry; bp.end = kSubEntry;
+    const int id = e.backend()->addBreakpoint(bp);
+    REQUIRE(id > 0);
+
+    Breakpoint edit = bp;
+    edit.id = id; edit.enabled = false; edit.condition = "x == 1"; edit.elang = 3;
+    CHECK(e.backend()->updateBreakpoint(edit));
+    const auto all = e.backend()->getBreakpoints();
+    REQUIRE(all.size() == 1);
+    CHECK_EQ(all[0].id, id);
+    CHECK(!all[0].enabled);
+    CHECK_STR(all[0].condition, "x == 1");
+    CHECK_EQ(all[0].elang, 3u);
+
+    edit.id = id + 100;                     // unknown: nothing to update
+    CHECK(!e.backend()->updateBreakpoint(edit));
+    CHECK_EQ(e.backend()->getBreakpoints().size(), size_t(1));
+    e.backend()->clearBreakpoints();
+}
+
+TEST(m68k_disabled_breakpoint_does_not_fire_until_enabled)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+
+    Breakpoint bp;
+    bp.type = BpType::PC; bp.cpu = Cpu::M68K;
+    bp.start = kSubEntry; bp.end = kSubEntry;
+    bp.id = e.backend()->addBreakpoint(bp);
+    REQUIRE(bp.id > 0);
+    bp.enabled = false;
+    REQUIRE(e.backend()->updateBreakpoint(bp));
+
+    uint64_t s = e.pauseSeq();
+    e.backend()->resume();
+    CHECK(!e.waitPause(s, 700));            // runs straight past it
+    e.backend()->pause();
+    REQUIRE(e.waitPause(s));
+
+    bp.enabled = true;
+    REQUIRE(e.backend()->updateBreakpoint(bp));
+    s = e.pauseSeq();
+    e.backend()->resume();
+    REQUIRE(e.waitPause(s));
+    CHECK_EQ(e.pausePc(), kSubEntry);
+    e.backend()->clearBreakpoints();
+}
+
 // (moved below armZ80: the Z80 must be parked on its own program first, or its
 // power-on NOP sled walks the whole 16-bit space and legitimately reaches any
 // address the test picks)

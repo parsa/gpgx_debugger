@@ -414,6 +414,13 @@ void GpgxBackend::removeBreakpoint(int id)
         [id](const Breakpoint& b){ return b.id == id; }), breakpoints_.end());
     bpCount_.store(int(breakpoints_.size()), std::memory_order_relaxed);
 }
+bool GpgxBackend::updateBreakpoint(const Breakpoint& bp)
+{
+    std::lock_guard<std::mutex> lk(bpMutex_);
+    for (auto& b : breakpoints_)
+        if (b.id == bp.id) { b = bp; return true; }
+    return false;
+}
 void GpgxBackend::clearBreakpoints() { std::lock_guard<std::mutex> lk(bpMutex_); breakpoints_.clear(); bpCount_.store(0, std::memory_order_relaxed); }
 std::vector<Breakpoint> GpgxBackend::getBreakpoints() { std::lock_guard<std::mutex> lk(bpMutex_); return breakpoints_; }
 

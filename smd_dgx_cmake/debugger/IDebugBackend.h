@@ -62,6 +62,10 @@ public:
     // Breakpoints
     virtual int  addBreakpoint(const Breakpoint&) = 0;
     virtual void removeBreakpoint(int id) = 0;
+    // Replace the breakpoint with id `bp.id` (range, kind, enabled, condition)
+    // in place, keeping its id. False if there is no such breakpoint or the
+    // backend cannot edit in place.
+    virtual bool updateBreakpoint(const Breakpoint& bp) = 0;
     virtual void clearBreakpoints() = 0;
     virtual std::vector<Breakpoint> getBreakpoints() = 0;
 

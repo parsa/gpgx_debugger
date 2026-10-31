@@ -476,6 +476,13 @@ void RemoteBackend::removeBreakpoint(int id)
     call(o.str());
 }
 
+bool RemoteBackend::updateBreakpoint(const Breakpoint&)
+{
+    // The bridge protocol has no in-place edit; callers fall back to their own
+    // remove/add. Only the in-process backend is edited in place.
+    return false;
+}
+
 void RemoteBackend::clearBreakpoints() { call("bpclear"); }
 
 std::vector<Breakpoint> RemoteBackend::getBreakpoints()
