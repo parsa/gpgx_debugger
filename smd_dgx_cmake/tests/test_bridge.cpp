@@ -1192,7 +1192,8 @@ struct FakeIda {
         });
         EmuHost::HostMutations hm;
         hm.resume = [this] {
-            sync.run([this] { host->gpgx()->beginRun(); }, [this] { be->resume(); });
+            sync.run([this] { host->gpgx()->startRunning(); },
+                     [this] { if (betweenRunSteps) betweenRunSteps(); host->gpgx()->announceResumed(); });
             return true;
         };
         h->setHostMutations(hm);
@@ -1207,6 +1208,7 @@ struct FakeIda {
     // Runs between IDA's decision to drive the machine and the resume itself,
     // to test that interleaving.
     std::function<void()> betweenDecisionAndResume;
+    std::function<void()> betweenRunSteps;           // inside a bridge run, see below
     void idaContinue()                               // continue_process -> ev_resume
     {
         suspended = false;
@@ -1653,4 +1655,39 @@ TEST(a_resume_inside_stop_publication_never_hides_the_stop)
     }
     CHECK(raw.cmd("pause") == "ok");
     CHECK(raw.cmd("wait 3000").rfind("ok paused", 0) == 0);
+}
+
+// A bridge run on a machine that is still running: a stop may happen, and IDA
+// collect it, while that run is being started. IDA must not be left suspended
+// at it while the machine runs on.
+TEST(a_stop_collected_while_a_bridge_run_starts_is_not_run_past)
+{
+    Wired w(52);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(52)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    FakeIda ida(w.emu.host());
+    REQUIRE(raw.cmd("resume").rfind("ok", 0) == 0);      // running, IDA running
+    ida.betweenRunSteps = [&] {
+        ida.betweenRunSteps = nullptr;
+        // The machine stops now and IDA collects that stop.
+        w.emu.backend()->pause();
+        for (int i = 0; i < 400 && !ida.suspended; ++i) {
+            ida.freeMainThread();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    };
+    REQUIRE(raw.cmd("resume").rfind("ok", 0) == 0);      // a second resume, while running
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    for (int i = 0; i < 40; ++i) {
+        ida.freeMainThread();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    if (w.emu.backend()->isPaused()) {
+        CHECK(ida.suspended);
+        CHECK_EQ(ida.pc, w.emu.backend()->getM68kRegs().pc & 0xFFFFFF);
+    } else {
+        CHECK(!ida.suspended);                            // never suspended on a stop run past
+    }
 }

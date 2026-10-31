@@ -90,23 +90,26 @@ public:
         return !held_ || !movedOn_;
     }
 
-    // A bridge client runs the machine. beginRun (a new run epoch) happens
-    // under the lock, so a stop collected after this is never from before it;
-    // resumeBackend and postContinue run after, outside it.
-    void run(const std::function<void()>& beginRun, const std::function<void()>& resumeBackend)
+    // A bridge client runs the machine. The transition to running (a new run
+    // epoch, the machine unpaused: GpgxBackend::startRunning) happens under
+    // the lock, so the host cannot collect a stop between deciding what it
+    // holds and the machine actually running; a stop collected after it is of
+    // this run. notify (announcing the resume; it reaches event sinks) and
+    // postContinue run after, outside the lock.
+    void run(const std::function<void()>& transition, const std::function<void()>& notify)
     {
         PostContinue post;
         {
             std::lock_guard<std::mutex> lk(mx_);
             for (auto it = q_.begin(); it != q_.end();)
                 it = it->stop ? q_.erase(it) : it + 1;
-            if (beginRun) beginRun();
+            if (transition) transition();
             if (held_) {
                 movedOn_ = true;
                 if (!continueWanted_) { continueWanted_ = true; post = post_; }
             }
         }
-        resumeBackend();
+        if (notify) notify();
         if (post) post();
     }
 

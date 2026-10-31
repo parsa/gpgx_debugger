@@ -82,6 +82,11 @@ public:
     // records the epoch it ended. A stop whose epoch is no longer current has
     // been run past: a host that has not collected it yet must not.
     uint64_t beginRun() { return runEpoch_.fetch_add(1) + 1; }
+    // resume() in two halves, for a host that must order the transition to
+    // running against its own bookkeeping (HostRunSync::run): startRunning
+    // (new epoch, unpaused) and announceResumed (the Resumed event).
+    void startRunning();
+    void announceResumed() { if (resumeCb_) resumeCb_(); }
     // Resume (or step) only if no other run began since `epoch` (from
     // beginRun): a host that decided to resume must not run the machine past
     // a stop a bridge client reached meanwhile. False: nothing done.

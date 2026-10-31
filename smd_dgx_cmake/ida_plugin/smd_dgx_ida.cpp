@@ -517,7 +517,8 @@ uint64_t begin_run() { return g_host ? g_host->gpgx()->beginRun() : 0; }
 bool host_resume()
 {
     if (!g_host) return false;
-    g_sync.run([] { begin_run(); }, [] { if (g_host) g_host->backend()->resume(); });
+    g_sync.run([] { if (g_host) g_host->gpgx()->startRunning(); },
+               [] { if (g_host) g_host->gpgx()->announceResumed(); });
     return true;
 }
 

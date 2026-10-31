@@ -18,7 +18,7 @@ struct Model {
         sync.setPostContinue([this] { ++posted; });
         sync.setEpochSource([this] { return epoch; });
     }
-    void run(const std::function<void()>& resume) { sync.run([this] { ++epoch; }, resume); }
+    void run(const std::function<void()>& resume) { sync.run([this, resume] { ++epoch; resume(); }, {}); }
     void stop(int n) { sync.pushStop(n, epoch); }
     std::vector<int> drain()
     {

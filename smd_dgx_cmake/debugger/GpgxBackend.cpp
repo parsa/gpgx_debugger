@@ -571,14 +571,17 @@ void GpgxBackend::serviceStoppedCpu()
 // publication: a resume can then never fall between a stop taking its run
 // epoch and the machine being marked paused (which would leave it paused at a
 // stop a host discards as already run past).
+void GpgxBackend::startRunning()
+{
+    std::lock_guard<std::mutex> lk(reqMx_);
+    beginRun();
+    paused_.store(false);
+}
+
 void GpgxBackend::resume()
 {
-    {
-        std::lock_guard<std::mutex> lk(reqMx_);
-        beginRun();
-        paused_.store(false);
-    }
-    if (resumeCb_) resumeCb_();
+    startRunning();
+    announceResumed();
 }
 void GpgxBackend::cancelRunRequests()
 {
