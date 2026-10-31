@@ -75,6 +75,7 @@ private:
     void serve();                                   // accept loop
     void serveClient(std::shared_ptr<Client> c);    // one connection
     std::string handle(const std::string& line, Client& c);
+    std::string settlePaused(Client& c);
     std::string handleEvents(Client& c, int max);
     std::string handleWait(Client& c, int timeoutMs);
     void onEmuEvent(const void* ev);                // DebugEvent, type-erased for the header

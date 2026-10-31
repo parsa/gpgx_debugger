@@ -104,6 +104,31 @@ TEST(instruction_budget_after_a_between_frame_stop)
     CHECK_EQ(e.backend()->getM68kRegs().pc, kSubRts);
 }
 
+// The same after recovering from a caught exception by moving PC.
+TEST(instruction_budget_after_moving_pc_on_an_exception_stop)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+
+    e.gpgx()->setExceptionCatch(uint64_t(1) << 4);
+    M68kRegs r = e.backend()->getM68kRegs();
+    r.pc = kIllegalEntry; r.sr = 0x2700; r.a[7] = kInitSp;
+    e.backend()->setM68kRegs(r);
+    const uint64_t s = e.pauseSeq();
+    e.backend()->resume();
+    REQUIRE(e.waitPause(s));
+    REQUIRE(e.pauseReason() == StopReason::Exception);
+    e.gpgx()->setExceptionCatch(0);
+
+    e.parkM68kAt(kJsr);
+    RunLimits budget;
+    budget.maxInstructions = 2;                          // jsr, nop
+    REQUIRE(runAndWait(e, budget));
+    CHECK(e.pauseReason() == StopReason::Budget);
+    CHECK_EQ(e.backend()->getM68kRegs().pc, kSubRts);
+}
+
 TEST(frame_budget_stops_after_that_many_frames)
 {
     t::Emu e;

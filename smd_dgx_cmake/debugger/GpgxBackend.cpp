@@ -660,7 +660,10 @@ void GpgxBackend::armRun(const RunLimits& lim)
     // instruction the CPU stands on. Stopped between frames (standingOnNext_),
     // its hook has yet to run and will count it: start one later, so the
     // budget is always instructions retired from here.
-    runStartExec_ = execCount_ + (standingOnNext_ ? 1 : 0);
+    // Likewise while stopped on a caught exception whose PC has been moved:
+    // standingOnNext_ is only set once that stop ends.
+    const bool standing = standingOnNext_ || (inExceptionStop_ && m68k.pc != excStopPc_);
+    runStartExec_ = execCount_ + (standing ? 1 : 0);
     runFrames_ = 0;
     runActive_.store(lim.any());
 }
@@ -811,7 +814,10 @@ void GpgxBackend::onM68kException(unsigned vector)
     if (excCb_) excCb_(x);
     if (vector < 64 && (excCatch_.load() >> vector) & 1) {
         const uint32_t before = m68k.pc;
+        excStopPc_ = before;
+        inExceptionStop_ = true;
         firePause(x.pc, Cpu::M68K, -1, StopReason::Exception);
+        inExceptionStop_ = false;
         // Moving PC here abandons the vector (see m68ki_jump_vector), and the
         // CPU then stands on the new PC like after any other stop: the next
         // instruction hook must execute it, not stop on it.

@@ -197,6 +197,10 @@ private:
     // Set by a stop delivered between frames: the next instruction hook is the
     // instruction the CPU is standing on, and must execute rather than stop.
     bool standingOnNext_ = false;
+    // Stopped on a caught exception (emulation thread state, read by armRun
+    // while paused): the PC at that moment, to tell whether it was moved.
+    bool     inExceptionStop_ = false;
+    uint32_t excStopPc_ = 0;
 
     std::mutex codemapMutex_;
     std::map<uint32_t, uint32_t> codemap_;

@@ -383,6 +383,27 @@ std::string BridgeServer::handleWait(Client& c, int timeoutMs)
     return o.str();
 }
 
+// Pause the machine if it runs, then wait until this bridge has seen the stop
+// it stands on (the host numbers a stop before it emits the event). "" when
+// settled, else the error reply.
+std::string BridgeServer::settlePaused(Client& client)
+{
+    IDebugBackend* be = host_->backend();
+    auto settled = [&] {
+        std::lock_guard<std::mutex> lk(clientsMx_);
+        return be->isPaused() && lastStopSeq_ == host_->stopCount();
+    };
+    if (!be->isPaused()) {
+        const std::string p = handle("pause", client);
+        if (p.rfind("ok", 0) != 0) return p;
+    }
+    for (int i = 0; i < 2000 && !settled(); ++i) {
+        if (stopFlag_.load()) return "err stopping";
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return settled() ? std::string() : std::string("err could not pause");
+}
+
 // ---------------------------------------------------------------------------
 std::string BridgeServer::handle(const std::string& line, Client& client)
 {
@@ -844,20 +865,11 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
 
         GpgxBackend* g = host_->gpgx();
         auto seenStop = [this] { std::lock_guard<std::mutex> lk(clientsMx_); return lastStopSeq_; };
-        // Set the case up only on a paused machine, and only once this bridge
-        // has seen that pause's event (the host numbers stops before it emits
-        // them): otherwise the case could start, or its stop be confused with
+        // Set the case up only on a paused machine whose stop this bridge has
+        // seen: otherwise the case could start, or its stop be confused with
         // an older one, before the baseline below is taken.
-        auto settled = [&] { return be->isPaused() && seenStop() == host_->stopCount(); };
-        if (!be->isPaused()) {
-            const std::string p = handle("pause", client);
-            if (p.rfind("ok", 0) != 0) return p;
-        }
-        for (int i = 0; i < 2000 && !settled(); ++i) {
-            if (stopFlag_.load()) return "err stopping";
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        if (!settled()) return "err could not pause";
+        const std::string settled = settlePaused(client);
+        if (!settled.empty()) return settled;
         bool stateOk = true;
         std::vector<uint8_t> before;
         // Everything that touches the machine happens on the emulation thread.
@@ -967,6 +979,10 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
             else return kUsage;
         }
         if (!toReturn && !lim.any()) return kUsage;
+        // Arm on a paused machine: armed while running, the target could be
+        // reached (and the limits spent) before the resume below runs past it.
+        const std::string settled = settlePaused(client);
+        if (!settled.empty()) return settled;
         GpgxBackend* g = host_->gpgx();
         if (!host_->invoke([&] {
                 if (toReturn) {

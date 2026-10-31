@@ -696,6 +696,16 @@ TEST(bridge_runto_return_address_and_budget)
     CHECK_STR(raw.cmd("runto frames=2"), "ok");
     const std::string f = raw.cmd("wait 3000");
     CHECK(f.find(" reason=budget") != std::string::npos);
+
+    // Issued while running: it pauses first, so the target is not run past.
+    CHECK_STR(raw.cmd("resume"), "ok");
+    CHECK_STR(raw.cmd("runto 302"), "ok");
+    std::string g;
+    for (int i = 0; i < 3; ++i) {                        // skip the settling pause
+        g = raw.cmd("wait 3000");
+        if (g.find(" reason=address") != std::string::npos) break;
+    }
+    CHECK(g.rfind("ok paused pc=302 ", 0) == 0);
 }
 
 // One command runs one case: set registers and memory, run to a stop
