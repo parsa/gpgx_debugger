@@ -159,6 +159,14 @@
 #define M68K_HOOK_MEM(type, size, addr, val) do {} while (0)
 #endif
 
+/* Debugger substitution for I/O-handler reads (main CPU only, see cpuhook.h). */
+#if defined(HOOK_CPU) && defined(M68K_MAIN_CPU_HOOKS)
+#define M68K_READ_FILTER(size, addr, val) \
+  do { if (cpu_read_filter) (val) = cpu_read_filter((size), ADDRESS_68K(addr), (val)); } while (0)
+#else
+#define M68K_READ_FILTER(size, addr, val) do {} while (0)
+#endif
+
 
 /* Shift & Rotate Macros. */
 #define LSL(A, C) ((A) << (C))
@@ -888,7 +896,7 @@ INLINE uint m68ki_read_8(uint address)
 
   m68ki_set_fc(FLAG_S | m68ki_get_address_space()); /* auto-disable (see m68kcpu.h) */
 
-  if (temp->read8) val = (*temp->read8)(ADDRESS_68K(address));
+  if (temp->read8) { val = (*temp->read8)(ADDRESS_68K(address)); M68K_READ_FILTER(1, address, val); }
   else val = READ_BYTE(temp->base, (address) & 0xffff);
 
   M68K_HOOK_MEM(HOOK_M68K_R, 1, address, val);
@@ -905,7 +913,7 @@ INLINE uint m68ki_read_16(uint address)
   m68ki_check_address_error(address, MODE_READ, FLAG_S | m68ki_get_address_space()); /* auto-disable (see m68kcpu.h) */
   
   temp = &m68ki_cpu.memory_map[((address)>>16)&0xff];
-  if (temp->read16) val = (*temp->read16)(ADDRESS_68K(address));
+  if (temp->read16) { val = (*temp->read16)(ADDRESS_68K(address)); M68K_READ_FILTER(2, address, val); }
   else val = *(uint16 *)(temp->base + ((address) & 0xfffe));
 
   M68K_HOOK_MEM(HOOK_M68K_R, 2, address, val);
@@ -922,11 +930,11 @@ INLINE uint m68ki_read_32(uint address)
   m68ki_check_address_error(address, MODE_READ, FLAG_S | m68ki_get_address_space()); /* auto-disable (see m68kcpu.h) */
 
   temp = &m68ki_cpu.memory_map[((address)>>16)&0xff];
-  if (temp->read16) val = (*temp->read16)(ADDRESS_68K(address)) << 16;
+  if (temp->read16) { uint hi = (*temp->read16)(ADDRESS_68K(address)); M68K_READ_FILTER(2, address, hi); val = hi << 16; }
   else val = *(uint16 *)(temp->base + ((address) & 0xfffe)) << 16;
 
   temp = &m68ki_cpu.memory_map[((address+2)>>16)&0xff];
-  if (temp->read16) val |= (*temp->read16)(ADDRESS_68K(address+2));
+  if (temp->read16) { uint lo = (*temp->read16)(ADDRESS_68K(address+2)); M68K_READ_FILTER(2, address + 2, lo); val |= lo; }
   else val |= *(uint16 *)(temp->base + ((address+2) & 0xfffe));
 
   M68K_HOOK_MEM(HOOK_M68K_R, 4, address, val);
@@ -1153,7 +1161,7 @@ INLINE void m68ki_jump(uint new_pc)
 
 INLINE void m68ki_jump_vector(uint vector)
 {
-#if defined(HOOK_CPU) && defined(M68K_EXCEPTION_HOOK)
+#if defined(HOOK_CPU) && defined(M68K_MAIN_CPU_HOOKS)
   /* Every exception passes here once its frame is stacked: tell a debugger.
      One that stopped here and moved PC has taken over: skip the vector. */
   if (cpu_hook)

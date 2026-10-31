@@ -41,6 +41,11 @@ static void cpuHookShim(hook_type_t type, int width, unsigned int addr, unsigned
         g_gpgxBackend->onCpuHook(static_cast<int>(type), width, addr, value);
 }
 
+static unsigned int readFilterShim(int width, unsigned int addr, unsigned int value)
+{
+    return g_gpgxBackend ? g_gpgxBackend->filterRead(width, addr, value) : value;
+}
+
 GpgxBackend::GpgxBackend()  { g_gpgxBackend = this; set_cpu_hook(cpuHookShim); }
 
 GpgxBackend::~GpgxBackend()
@@ -49,6 +54,7 @@ GpgxBackend::~GpgxBackend()
     // global on construction, and an unconditional clear here would silently
     // kill breakpoints and stepping for whoever is actually running.
     if (g_gpgxBackend == this) {
+        set_cpu_read_filter(nullptr);
         set_cpu_hook(nullptr);
         g_gpgxBackend = nullptr;
     }
@@ -655,6 +661,31 @@ void GpgxBackend::onFrameEnd()
         runActive_.store(false);
         requestPause(StopReason::Budget);
     }
+}
+
+void GpgxBackend::setReadOverrides(const std::vector<ReadOverride>& v)
+{
+    {
+        std::lock_guard<std::mutex> lk(ovrMx_);
+        overrides_ = v;
+    }
+    // No overrides, no filter: the core's read path is then untouched.
+    set_cpu_read_filter(v.empty() ? nullptr : readFilterShim);
+}
+
+std::vector<ReadOverride> GpgxBackend::readOverrides() const
+{
+    std::lock_guard<std::mutex> lk(ovrMx_);
+    return overrides_;
+}
+
+uint32_t GpgxBackend::filterRead(int width, uint32_t address, uint32_t value)
+{
+    std::lock_guard<std::mutex> lk(ovrMx_);
+    for (const auto& o : overrides_)
+        if (o.size == width && o.address == (address & 0xFFFFFF))
+            value = (value & ~o.mask) | (o.value & o.mask);
+    return value;
 }
 
 void GpgxBackend::startAccessLog(const AccessLogConfig& cfg)

@@ -172,6 +172,35 @@ struct AccessLog {
     std::vector<AccessLogEntry> entries;     // in execution order
 };
 
+// A debugger-imposed answer for one I/O read (GpgxBackend::setReadOverrides):
+// a main-68000 read of `size` bytes at `address` that goes through an I/O
+// handler returns (hardware & ~mask) | (value & mask). RAM and ROM reads are
+// never affected.
+struct ReadOverride {
+    uint32_t address = 0;
+    uint8_t  size    = 1;
+    uint32_t mask    = 0;
+    uint32_t value   = 0;
+
+    // The Z80 bus always reads as granted (BUSACK, D0 of $A11100, clear).
+    static std::vector<ReadOverride> z80BusGranted()
+    {
+        return { { 0xA11100, 1, 0x01, 0x00 }, { 0xA11100, 2, 0x0100, 0x0000 } };
+    }
+    // Force VDP status bits (word mask/value) at both status-port mirrors,
+    // for word and byte reads.
+    static std::vector<ReadOverride> vdpStatus(uint16_t mask, uint16_t value)
+    {
+        std::vector<ReadOverride> v;
+        for (uint32_t port : { 0xC00004u, 0xC00006u }) {
+            v.push_back({ port, 2, mask, value });
+            v.push_back({ port, 1, uint32_t(mask >> 8), uint32_t(value >> 8) });
+            v.push_back({ port + 1, 1, uint32_t(mask & 0xFF), uint32_t(value & 0xFF) });
+        }
+        return v;
+    }
+};
+
 // A 68000 exception, as the core raised it.
 enum class ExcAccess : uint8_t { None = 0, Read, Write, Fetch };
 struct ExceptionInfo {

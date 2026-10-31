@@ -118,6 +118,25 @@ error_t idaapi idc_smd_dgx_catch(idc_value_t* argv, idc_value_t* res)
     res->set_string(out);
     return eOk;
 }
+// smd_dgx_override([spec]): hardware-wait overrides (see applyOverrideSpec:
+// none | z80bus | vdp <mask> <value> | io <addr> <1|2> <mask> <value>).
+// Returns "n=<count>" or "error: ...".
+error_t idaapi idc_smd_dgx_override(idc_value_t* argv, idc_value_t* res)
+{
+    if (!g_host) { res->set_string("error: no process"); return eOk; }
+    std::vector<ReadOverride> set = g_host->gpgx()->readOverrides();
+    if (!applyOverrideSpec(argv[0].vtype == VT_STR ? argv[0].c_str() : "", set)) {
+        res->set_string("error: override spec is none|z80bus|vdp <mask> <value>|io <addr> <1|2> <mask> <value>");
+        return eOk;
+    }
+    g_host->gpgx()->setReadOverrides(set);
+    res->set_string(("n=" + std::to_string(set.size())).c_str());
+    return eOk;
+}
+const char kOverrideArgs[] = { VT_STR, 0 };
+const idc_value_t kOverrideDefault("");
+const ext_idcfunc_t kOverrideFunc = { "smd_dgx_override", idc_smd_dgx_override, kOverrideArgs, &kOverrideDefault, 1, 0 };
+
 const char kCatchArgs[] = { VT_STR, 0 };
 const idc_value_t kCatchDefault("");
 const ext_idcfunc_t kCatchFunc = { "smd_dgx_catch", idc_smd_dgx_catch, kCatchArgs, &kCatchDefault, 1, 0 };
@@ -1432,6 +1451,7 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
         hook_event_listener(HT_DBG, &bpt_listener);
         add_idc_func(kStopFunc);
         add_idc_func(kCatchFunc);
+        add_idc_func(kOverrideFunc);
         define_m68k_exceptions();
         dbg = &debugger;
 #ifdef SMD_DGX_IDA_VIEWS
@@ -1449,6 +1469,7 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
         cancel_bridge_ui_requests();
         del_idc_func(kStopFunc.name);
         del_idc_func(kCatchFunc.name);
+        del_idc_func(kOverrideFunc.name);
 #ifdef SMD_DGX_IDA_VIEWS
         if (is_idaq()) smd_dgx_unregister_views();
 #endif

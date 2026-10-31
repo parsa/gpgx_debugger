@@ -738,6 +738,25 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
     // behind its back its UI stays stuck on "suspended" forever. Asking IDA to
     // continue instead means IDA reaches the backend by its own path and its
     // state is right by construction.
+    // Hardware-wait overrides (off by default): "override" lists them;
+    // "override none|z80bus|vdp <mask> <value>|io <addr> <1|2> <mask> <value>"
+    // clears or adds (see applyOverrideSpec). Reply lists the active set as
+    // addr:size:mask:value.
+    if (cmd == "override") {
+        std::string rest;
+        std::getline(is, rest);
+        GpgxBackend* g = host_->gpgx();
+        std::vector<ReadOverride> set = g->readOverrides();
+        if (!applyOverrideSpec(rest, set))
+            return "err usage: override [none|z80bus|vdp <hex-mask> <hex-value>|io <hex-addr> <1|2> <hex-mask> <hex-value>]";
+        g->setReadOverrides(set);
+        std::ostringstream o;
+        o << "ok n=" << set.size() << std::hex;
+        for (const auto& v : set)
+            o << " " << v.address << ":" << unsigned(v.size) << ":" << v.mask << ":" << v.value;
+        return o.str();
+    }
+
     // Run one test case in one call. Tokens (any order):
     //   pc=<hex>                 required: where to start
     //   state=<path>             load this save state first (no spaces in path)

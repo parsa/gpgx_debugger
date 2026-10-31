@@ -132,6 +132,56 @@ inline bool parseCatchSpec(const std::string& spec, uint64_t& mask)
     return true;
 }
 
+// Apply an override spec to a set of read overrides (bridge `override`, IDA
+// smd_dgx_override()):
+//   none                              clear all
+//   z80bus                            Z80 bus always reads as granted
+//   vdp <hex-mask> <hex-value>        force VDP status bits
+//   io <hex-addr> <1|2> <hex-mask> <hex-value>   any I/O read of that size
+// Empty spec: no change. False on a malformed spec (set unchanged).
+inline bool applyOverrideSpec(const std::string& spec, std::vector<ReadOverride>& set)
+{
+    std::vector<std::string> t;
+    for (size_t p = 0; p < spec.size(); ) {
+        while (p < spec.size() && spec[p] == ' ') ++p;
+        size_t q = p;
+        while (q < spec.size() && spec[q] != ' ') ++q;
+        if (q > p) t.push_back(spec.substr(p, q - p));
+        p = q;
+    }
+    auto hex = [](const std::string& s, uint32_t& v) {
+        const char* c = s.c_str();
+        if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0) c += 2;
+        if (!*c) return false;
+        uint64_t x = 0;
+        for (; *c; ++c) {
+            const int d = (*c >= '0' && *c <= '9') ? *c - '0' : (*c >= 'a' && *c <= 'f') ? *c - 'a' + 10
+                        : (*c >= 'A' && *c <= 'F') ? *c - 'A' + 10 : -1;
+            if (d < 0 || x > 0xFFFFFFFull) return false;
+            x = (x << 4) | uint64_t(d);
+        }
+        v = uint32_t(x);
+        return true;
+    };
+    if (t.empty()) return true;
+    if (t[0] == "none" && t.size() == 1) { set.clear(); return true; }
+    if (t[0] == "z80bus" && t.size() == 1) {
+        for (const auto& o : ReadOverride::z80BusGranted()) set.push_back(o);
+        return true;
+    }
+    uint32_t a = 0, b = 0, c = 0, d = 0;
+    if (t[0] == "vdp" && t.size() == 3 && hex(t[1], a) && hex(t[2], b) && a <= 0xFFFF) {
+        for (const auto& o : ReadOverride::vdpStatus(uint16_t(a), uint16_t(b))) set.push_back(o);
+        return true;
+    }
+    if (t[0] == "io" && t.size() == 5 && hex(t[1], a) && (t[2] == "1" || t[2] == "2") &&
+        hex(t[3], c) && hex(t[4], d)) {
+        set.push_back(ReadOverride{ a & 0xFFFFFF, uint8_t(t[2][0] - '0'), c, d });
+        return true;
+    }
+    return false;
+}
+
 // Bidirectional transport endpoint. The emulator side sends events and
 // receives commands; the client side (UI / IDA) does the reverse.
 class IDebugTransport {

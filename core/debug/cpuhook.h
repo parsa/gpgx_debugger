@@ -92,5 +92,13 @@ extern cpu_hook_t cpu_hook;
  */
 void set_cpu_hook(cpu_hook_t hook);
 
+/* Optional filter on main-68000 reads that go through an I/O read handler
+ * (never RAM/ROM): returns the value the CPU sees. NULL = no filtering. A
+ * debugger uses it to stand in for hardware that is not in the state code
+ * expects (e.g. a Z80 bus that is never granted). */
+typedef unsigned int (*cpu_read_filter_t)(int width, unsigned int address, unsigned int value);
+extern cpu_read_filter_t cpu_read_filter;
+void set_cpu_read_filter(cpu_read_filter_t filter);
+
 
 #endif /* _CPUHOOK_H_ */

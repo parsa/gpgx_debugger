@@ -57,6 +57,15 @@ constexpr uint32_t kTrapEntry    = 0x0530;
 constexpr uint32_t kAddrErrEntry = 0x0540;
 constexpr uint32_t kExcHandler   = 0x0600;
 
+// Z80 bus wait, as a game does it on a Z80 still held in reset (power on):
+//   0560  33FC 0000 00A11200   move.w #$0000,$A11200 ; assert Z80 /RESET
+//   0568  33FC 0100 00A11100   move.w #$0100,$A11100 ; request the bus
+//   0570  0839 0000 00A11100   btst   #0,$A11100     ; granted when D0 is 0
+//   0578  66F6                 bne.s  $0570          ; never, while in reset
+//   057A  4E75                 rts
+constexpr uint32_t kZ80BusWait    = 0x0560;
+constexpr uint32_t kZ80BusWaitRts = 0x057A;
+
 inline void put32be(std::vector<uint8_t>& r, uint32_t at, uint32_t v)
 {
     r[at + 0] = uint8_t(v >> 24); r[at + 1] = uint8_t(v >> 16);
@@ -141,6 +150,18 @@ inline std::vector<uint8_t> buildRom()
     put16be(rom, kTrapEntry, 0x4E40);          // trap #0
     put16be(rom, kAddrErrEntry + 0, 0x3038);   // move.w ($0001).w,d0
     put16be(rom, kAddrErrEntry + 2, 0x0001);
+
+    put16be(rom, kZ80BusWait + 0x00, 0x33FC);  // move.w #$0000,$A11200
+    put16be(rom, kZ80BusWait + 0x02, 0x0000);
+    put32be(rom, kZ80BusWait + 0x04, 0x00A11200);
+    put16be(rom, kZ80BusWait + 0x08, 0x33FC);  // move.w #$0100,$A11100
+    put16be(rom, kZ80BusWait + 0x0A, 0x0100);
+    put32be(rom, kZ80BusWait + 0x0C, 0x00A11100);
+    put16be(rom, kZ80BusWait + 0x10, 0x0839);  // btst #0,$A11100
+    put16be(rom, kZ80BusWait + 0x12, 0x0000);
+    put32be(rom, kZ80BusWait + 0x14, 0x00A11100);
+    put16be(rom, kZ80BusWait + 0x18, 0x66F6);  // bne.s $570
+    put16be(rom, kZ80BusWaitRts, 0x4E75);      // rts
 
     return rom;
 }

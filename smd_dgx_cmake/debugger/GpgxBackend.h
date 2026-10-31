@@ -121,6 +121,12 @@ public:
     // The host calls this after every frame (frame budgets).
     void onFrameEnd();
 
+    // Hardware-wait overrides, off (empty) by default. While any are set the
+    // core consults them on I/O-handler reads; empty uninstalls the filter.
+    void setReadOverrides(const std::vector<ReadOverride>& v);
+    std::vector<ReadOverride> readOverrides() const;
+    uint32_t filterRead(int width, uint32_t address, uint32_t value);
+
     // The access behind the current Watchpoint stop.
     AccessInfo lastAccess() const;
 
@@ -208,6 +214,9 @@ private:
     RunLimits             run_;
     uint64_t              runStartExec_ = 0;
     uint64_t              runFrames_ = 0;
+
+    mutable std::mutex        ovrMx_;
+    std::vector<ReadOverride> overrides_;   // guarded by ovrMx_
 
     std::atomic<bool>     logOn_ {false};
     mutable std::mutex    logMx_;

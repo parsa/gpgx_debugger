@@ -50,4 +50,11 @@ void set_cpu_hook(cpu_hook_t hook)
 	cpu_hook = hook;
 }
 
+cpu_read_filter_t cpu_read_filter = NULL;
+
+void set_cpu_read_filter(cpu_read_filter_t filter)
+{
+	cpu_read_filter = filter;
+}
+
 #endif /* HOOK_CPU */

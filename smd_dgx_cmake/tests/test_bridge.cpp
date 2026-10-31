@@ -766,6 +766,27 @@ TEST(bridge_runcase_from_a_save_state_is_deterministic)
     std::remove(path.c_str());
 }
 
+TEST(bridge_override_lets_a_z80_bus_wait_finish)
+{
+    Wired w(31);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(31)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+
+    CHECK_STR(raw.cmd("override"), "ok n=0");
+    CHECK(raw.cmd("override io a11100 3 1 0").rfind("err usage", 0) == 0);
+    const std::string c = "runcase pc=560 a7=ffeffc sr=2700 mem=ffeffc:0000021e return instr=20000";
+    CHECK(raw.cmd(c).rfind("ok reason=budget ", 0) == 0);              // spins: Z80 in reset
+    CHECK_STR(raw.cmd("override z80bus"), "ok n=2 a11100:1:1:0 a11100:2:100:0");
+    CHECK(raw.cmd(c).rfind("ok reason=return pc=21e ", 0) == 0);
+    CHECK_STR(raw.cmd("override vdp 88 80"),
+              "ok n=8 a11100:1:1:0 a11100:2:100:0 c00004:2:88:80 c00004:1:0:0 c00005:1:88:80 "
+              "c00006:2:88:80 c00006:1:0:0 c00007:1:88:80");
+    CHECK_STR(raw.cmd("override none"), "ok n=0");
+    CHECK(raw.cmd(c).rfind("ok reason=budget ", 0) == 0);
+}
+
 TEST(bridge_falls_through_to_the_backend_without_a_host)
 {
     // The standalone app installs nothing, and a host may decline any single
