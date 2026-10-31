@@ -421,7 +421,12 @@ std::string BridgeServer::settlePaused(Client& client)
         if (stopFlag_.load()) return "err stopping";
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    return settled() ? std::string() : std::string("err could not pause");
+    if (!settled()) return "err could not pause";
+    // The stop this made is the command's own business: a later `wait` must
+    // not hand it back as if the client's run had produced it.
+    std::lock_guard<std::mutex> lk(clientsMx_);
+    if (client.reportedSeq < lastStopSeq_) client.reportedSeq = lastStopSeq_;
+    return std::string();
 }
 
 // ---------------------------------------------------------------------------
@@ -597,6 +602,10 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         int n = (int)nv;
         if (n <= 0) n = 1;
         if (n > 100000) return "err too many frames";
+        // Arm on a paused machine: armed while it runs, the advance could end
+        // (and its stop be run past by the start below) before the run starts.
+        const std::string settled = settlePaused(client);
+        if (!settled.empty()) return settled;
         startRunAfresh();
         host_->advanceFrames(n);
         if (!runMachine()) { host_->advanceFrames(0); return "err host declined to run"; }
@@ -1187,6 +1196,8 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
             return "err usage: stepframe [dec-count]";
         if (n == 0 || n > 100000) return "err bad frame count";
 
+        const std::string settled = settlePaused(client);       // see frameadv
+        if (!settled.empty()) return settled;
         const uint64_t before = host_->stopCount();
         startRunAfresh();
         host_->advanceFrames((int)n);
@@ -1211,6 +1222,10 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
     // optional trailing "z80" selects the sound CPU
     if (cmd == "stepi" || cmd == "stepo") {
         const Cpu cpu = (arg() == "z80") ? Cpu::Z80 : Cpu::M68K;
+        // A step armed on a running machine would be taken (and its stop run
+        // past by the start below) before the run starts: settle first.
+        const std::string settled = settlePaused(client);
+        if (!settled.empty()) return settled;
         GpgxBackend* g = host_->gpgx();
         startRunAfresh();
         if (cmd == "stepi") g->armStepInto(cpu); else g->armStepOver(cpu);

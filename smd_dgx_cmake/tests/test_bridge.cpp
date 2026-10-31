@@ -1691,3 +1691,37 @@ TEST(a_stop_collected_while_a_bridge_run_starts_is_not_run_past)
         CHECK(!ida.suspended);                            // never suspended on a stop run past
     }
 }
+
+// Stepping (or frame-advancing) a machine that is still running: the request
+// must not be consumed, and its stop run past, before the host gets to start
+// the run. The machine ends paused at the step's (the advance's) stop.
+TEST(stepping_a_running_machine_ends_paused_at_the_step)
+{
+    Wired w(53);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(53)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    EmuHost::HostMutations hm;
+    hm.resume = [&] {                                     // a host slow to start the run
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        w.emu.backend()->resume();
+        return true;
+    };
+    w.emu.host()->setHostMutations(hm);
+    for (const char* c : { "stepi", "stepo", "frameadv 1", "stepframe 1" }) {
+        REQUIRE(raw.cmd("resume").rfind("ok", 0) == 0);  // running
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        CHECK(raw.cmd(c).rfind("ok", 0) == 0);
+        const std::string cs = c;
+        if (cs != "stepframe 1") {                        // the command's own stop, not the settling pause
+            const std::string wr = raw.cmd("wait 3000");
+            CHECK(wr.find(cs.rfind("step", 0) == 0 ? " reason=step" : " reason=frame") != std::string::npos);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        const std::string st = raw.cmd("status");
+        if (st.find(" paused=1") == std::string::npos) std::printf("    %s -> %s\n", c, st.c_str());
+        CHECK(st.find(" paused=1") != std::string::npos);
+    }
+    w.emu.host()->setHostMutations({});
+}
