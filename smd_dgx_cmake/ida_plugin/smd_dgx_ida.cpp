@@ -11,6 +11,8 @@
 // is installed (written against the 9.x idd.hpp surface Gensida used).
 
 #include <atomic>
+#include <chrono>
+#include <thread>
 #include <memory>
 #include <deque>
 #include <map>
@@ -444,10 +446,18 @@ void cancel_bridge_ui_requests()
 struct run_ctl_req : public exec_request_t {
     bool wantRun;
     bool ok = false;
+    bool notYet = false;
     explicit run_ctl_req(bool run) : wantRun(run) {}
     ssize_t idaapi execute() override {
         const int st = get_process_state();
         if (st == DSTATE_NOTASK) return 0;          // nothing being debugged
+        // The emulator stopped but IDA has not processed that stop yet: it
+        // still believes the process runs, so continuing now would be a no-op
+        // and the stop would stick. The caller retries.
+        if (wantRun && st == DSTATE_RUN && g_host && g_host->backend()->isPaused()) {
+            notYet = true;
+            return 0;
+        }
         // Only correct a real mismatch. Asking IDA to continue a process it
         // already believes is running would be a second, spurious resume.
         if (wantRun && st == DSTATE_SUSP)  ok = continue_process();
@@ -457,7 +467,17 @@ struct run_ctl_req : public exec_request_t {
     }
 };
 
-bool host_resume() { run_ctl_req r(true);  return execute_bridge_ui(r) && r.ok; }
+bool host_resume()
+{
+    // A bridge client thread: it may wait for IDA to catch up with a stop.
+    for (int attempt = 0; attempt < 400; ++attempt) {
+        run_ctl_req r(true);
+        if (!execute_bridge_ui(r)) return false;
+        if (!r.notYet) return r.ok;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+}
 bool host_pause()  { run_ctl_req r(false); return execute_bridge_ui(r) && r.ok; }
 
 void translate_bpt(ea_t ea, int size, bpttype_t itype,

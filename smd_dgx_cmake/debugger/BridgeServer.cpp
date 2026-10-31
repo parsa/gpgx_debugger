@@ -738,6 +738,175 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
     // behind its back its UI stays stuck on "suspended" forever. Asking IDA to
     // continue instead means IDA reaches the backend by its own path and its
     // state is right by construction.
+    // Run one test case in one call. Tokens (any order):
+    //   pc=<hex>                 required: where to start
+    //   state=<path>             load this save state first (no spaces in path)
+    //   d0..d7 a0..a7 sr=<hex>   registers (A7 is the active stack pointer)
+    //   ram=<hex>                the whole 64 KiB of work RAM
+    //   mem=<addr>:<hex>         write bytes at a 68000 address (repeatable)
+    //   return | until=<hex> | instr=N | frames=N   stop conditions (at least one)
+    //   log=<space:start-end>    log accesses in this range (repeatable)
+    //   logcap=N  timeout=<ms>   log capacity; wall-clock safety limit
+    // Reply: ok <stop description> pc= d0.. a7= sr= usp= isp= frames= instr=
+    //        diff=<n> [<off>:<hex> ...] log=<n> dropped=<d> [entries] | log=-
+    // The RAM diff is against work RAM as it was after the writes.
+    if (cmd == "runcase") {
+        static const char* kUsage =
+            "err usage: runcase pc=<hex> [state=<path>] [d0..a7|sr=<hex>] [ram=<hex>] [mem=<addr>:<hex>] "
+            "(return|until=<hex>|instr=N|frames=N) [log=<space:start-end>] [logcap=N] [timeout=<ms>]";
+        struct Write { uint32_t addr; std::vector<uint8_t> data; };
+        std::string statePath;
+        std::vector<uint8_t> image;
+        std::vector<Write> writes;
+        bool havePc = false, toReturn = false, logOn = false;
+        uint32_t pc = 0, timeoutMs = 5000;
+        std::vector<std::pair<int, uint32_t>> regs;   // index 0-7 D, 8-15 A, 16 SR
+        RunLimits lim;
+        AccessLogConfig logCfg;
+        for (std::string tok = arg(); !tok.empty(); tok = arg()) {
+            if (tok == "return") { toReturn = true; continue; }
+            const size_t eq = tok.find('=');
+            if (eq == std::string::npos) return kUsage;
+            const std::string k = tok.substr(0, eq), v = tok.substr(eq + 1);
+            uint32_t n = 0;
+            if (k.size() == 2 && (k[0] == 'd' || k[0] == 'a') && k[1] >= '0' && k[1] <= '7') {
+                if (!parseNum(v, n)) return kUsage;
+                regs.emplace_back((k[0] == 'a' ? 8 : 0) + (k[1] - '0'), n);
+            } else if (k == "sr") {
+                if (!parseNum(v, n)) return kUsage;
+                regs.emplace_back(16, n & 0xFFFF);
+            } else if (k == "pc") {
+                if (!parseNum(v, pc)) return kUsage;
+                havePc = true;
+            } else if (k == "state") {
+                if (v.empty()) return kUsage;
+                statePath = v;
+            } else if (k == "ram") {
+                image = fromHex(v);
+                if (image.size() != 0x10000) return kUsage;
+            } else if (k == "mem") {
+                const size_t colon = v.find(':');
+                Write w;
+                if (colon == std::string::npos || !parseNum(v.substr(0, colon), w.addr)) return kUsage;
+                w.data = fromHex(v.substr(colon + 1));
+                if (w.data.empty() || w.data.size() * 2 != v.size() - colon - 1) return kUsage;
+                writes.push_back(std::move(w));
+            } else if (k == "until") {
+                if (!parseNum(v, n)) return kUsage;
+                lim.stopAddr = n;
+            } else if (k == "instr" || k == "frames" || k == "logcap" || k == "timeout") {
+                if (!parseNum(v, n, 10) || !n) return kUsage;
+                if (k == "instr") lim.maxInstructions = n;
+                else if (k == "frames") lim.maxFrames = n;
+                else if (k == "logcap") logCfg.capacity = n;
+                else timeoutMs = n;
+            } else if (k == "log") {
+                const size_t colon = v.find(':'), dash = v.find('-');
+                if (colon == std::string::npos || dash == std::string::npos || dash < colon) return kUsage;
+                AccessRange r;
+                const std::string space = v.substr(0, colon);
+                if (space == "m68k") r.space = AccessSpace::M68k;
+                else if (space == "z80") r.space = AccessSpace::Z80;
+                else if (space == "vdp") r.space = AccessSpace::Vdp;
+                else return kUsage;
+                if (!parseNum(v.substr(colon + 1, dash - colon - 1), r.start) ||
+                    !parseNum(v.substr(dash + 1), r.end) || r.end < r.start)
+                    return kUsage;
+                logCfg.ranges.push_back(r);
+                logOn = true;
+            } else {
+                return kUsage;
+            }
+        }
+        if (!havePc || (!toReturn && !lim.any())) return kUsage;
+
+        GpgxBackend* g = host_->gpgx();
+        bool stateOk = true;
+        std::vector<uint8_t> before;
+        // Everything that touches the machine happens on the emulation thread.
+        if (!host_->invoke([&] {
+                if (!statePath.empty() && !(stateOk = g->loadState(statePath.c_str()))) return;
+                M68kRegs r = g->getM68kRegs();
+                for (const auto& [i, val] : regs) {
+                    if (i < 8) r.d[i] = val;
+                    else if (i < 16) r.a[i - 8] = val;
+                    else r.sr = val;
+                }
+                r.pc = pc & 0xFFFFFF;
+                g->setM68kRegs(r);
+                if (!image.empty()) g->writeMemory(0xFF0000, image.data(), uint32_t(image.size()));
+                for (const auto& w : writes) g->writeMemory(w.addr, w.data.data(), uint32_t(w.data.size()));
+                before = g->readMemory(0xFF0000, 0x10000);
+                if (toReturn) {
+                    const RunLimits ret = RunLimits::toReturnFromHere(*g);
+                    lim.toReturn = true; lim.returnAddr = ret.returnAddr; lim.entrySp = ret.entrySp;
+                }
+                g->armRun(lim);
+                if (logOn) g->startAccessLog(logCfg);
+            }))
+            return "err emulator not running";
+        if (!stateOk) return "err state io failed";
+
+        const uint64_t stops = host_->stopCount();
+        const uint64_t frames0 = host_->frameCount();
+        const std::string resumed = handle("resume", client);
+        if (resumed.rfind("ok", 0) != 0) return resumed;
+        bool timedOut = true;
+        for (uint32_t waited = 0; waited < timeoutMs; ++waited) {
+            if (host_->stopCount() != stops) { timedOut = false; break; }
+            if (stopFlag_.load()) return "err stopping";
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if (timedOut) {
+            g->disarmRun();
+            handle("pause", client);
+            for (int i = 0; i < 2000 && host_->stopCount() == stops; ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if (logOn) g->stopAccessLog();
+
+        std::ostringstream o;
+        {
+            std::lock_guard<std::mutex> lk(clientsMx_);
+            o << "ok " << (lastStopDetail_.empty() ? std::string("reason=none") : lastStopDetail_);
+        }
+        if (timedOut) o << " timeout=1";
+        const M68kRegs r = be->getM68kRegs();
+        o << " pc=" << std::hex << r.pc;
+        for (int i = 0; i < 8; ++i) o << " d" << i << "=" << r.d[i];
+        for (int i = 0; i < 8; ++i) o << " a" << i << "=" << r.a[i];
+        o << " sr=" << r.sr << " usp=" << r.usp << " isp=" << r.isp
+          << std::dec << " frames=" << (host_->frameCount() - frames0);
+
+        const auto after = be->readMemory(0xFF0000, 0x10000);
+        std::ostringstream d;
+        size_t runs = 0;
+        for (size_t i = 0; i < after.size() && i < before.size(); ) {
+            if (after[i] == before[i]) { ++i; continue; }
+            size_t j = i;
+            while (j < after.size() && after[j] != before[j]) ++j;
+            d << " " << std::hex << i << ":" << toHex(after.data() + i, j - i);
+            ++runs;
+            i = j;
+        }
+        o << " diff=" << std::dec << runs << d.str();
+
+        if (!logOn) {
+            o << " log=-";
+        } else {
+            const AccessLog log = g->accessLog();
+            o << " log=" << log.entries.size() << " dropped=" << log.dropped;
+            for (const AccessLogEntry& e : log.entries) {
+                const AccessInfo& a = e.access;
+                o << " " << std::hex << e.pc << "," << (e.cpu == Cpu::Z80 ? "z80" : "m68k") << ","
+                  << (a.write ? "w" : "r") << ","
+                  << (a.space == AccessSpace::Z80 ? "z80" : a.space == AccessSpace::Vdp ? "vdp" : "m68k")
+                  << "," << a.address << "," << std::dec << unsigned(a.size) << "," << std::hex << a.value;
+            }
+        }
+        return o.str();
+    }
+
     // Resume with run limits: "runto [return|<hex-addr>] [instr=N] [frames=N]".
     // "return" means the routine the CPU stands at the entry of: return address
     // at (A7), stop once PC reaches it with A7 above its entry value. Returns

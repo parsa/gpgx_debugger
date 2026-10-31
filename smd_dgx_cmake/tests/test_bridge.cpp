@@ -698,6 +698,74 @@ TEST(bridge_runto_return_address_and_budget)
     CHECK(f.find(" reason=budget") != std::string::npos);
 }
 
+// One command runs one case: set registers and memory, run to a stop
+// condition, report why it stopped, the registers, the RAM diff, the log.
+TEST(bridge_runcase_runs_a_routine_to_its_return)
+{
+    Wired w(28);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(28)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+
+    CHECK(raw.cmd("runcase return").rfind("err usage", 0) == 0);          // no pc
+    CHECK(raw.cmd("runcase pc=300").rfind("err usage", 0) == 0);          // no stop condition
+
+    // nop; rts at $300, returning to $21E pushed at $FFEFFC.
+    const std::string r = raw.cmd("runcase pc=300 a7=ffeffc sr=2700 d3=1234 mem=ffeffc:0000021e return");
+    CHECK(r.rfind("ok reason=return pc=21e ", 0) == 0);
+    CHECK(r.find(" d3=1234 ") != std::string::npos);
+    CHECK(r.find(" a7=fff000 ") != std::string::npos);
+    CHECK(r.find(" diff=0") != std::string::npos);                      // rts only reads
+    CHECK(r.find(" log=-") != std::string::npos);                       // log not requested
+}
+
+TEST(bridge_runcase_reports_ram_diff_and_access_log)
+{
+    Wired w(29);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(29)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+
+    // The data routine writes $12345678 to $FF4276 then reads it back.
+    const std::string r = raw.cmd("runcase pc=240 a7=fff000 mem=ff4276:00000000 until=250 "
+                                  "log=m68k:ff4276-ff4279");
+    CHECK(r.rfind("ok reason=address pc=250 ", 0) == 0);
+    CHECK(r.find(" d0=12345678 ") != std::string::npos);
+    CHECK(r.find(" diff=1 4276:12345678 ") != std::string::npos);
+    CHECK(r.find(" log=2 dropped=0 240,m68k,w,m68k,ff4276,4,12345678 24a,m68k,r,m68k,ff4276,4,12345678")
+          != std::string::npos);
+
+    // A whole 64 KiB RAM image, all $AA, then the same run: the diff is
+    // relative to the image, so only the four written bytes differ.
+    const std::string img(0x10000 * 2, 'a');
+    const std::string i = raw.cmd("runcase pc=240 a7=fff000 ram=" + img + " until=250");
+    CHECK(i.find(" diff=1 4276:12345678 ") != std::string::npos);
+
+    const std::string b = raw.cmd("runcase pc=21e a7=fff000 instr=2");
+    CHECK(b.rfind("ok reason=budget pc=218 ", 0) == 0);                 // nop, bra.s back to the jsr
+}
+
+TEST(bridge_runcase_from_a_save_state_is_deterministic)
+{
+    Wired w(30);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(30)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+
+    const char* tmp = std::getenv("TMPDIR");
+    const std::string path = std::string(tmp ? tmp : ".") + "/smd_dgx_runcase.state";
+    REQUIRE(raw.cmd("savestate " + path) == "ok");
+    const std::string c = "runcase state=" + path + " pc=218 a7=fff000 frames=2";
+    const std::string first = raw.cmd(c);
+    const std::string second = raw.cmd(c);
+    CHECK(first.rfind("ok reason=budget ", 0) == 0);
+    CHECK_STR(second, first);
+    std::remove(path.c_str());
+}
+
 TEST(bridge_falls_through_to_the_backend_without_a_host)
 {
     // The standalone app installs nothing, and a host may decline any single
