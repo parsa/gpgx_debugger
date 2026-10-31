@@ -129,6 +129,29 @@ TEST(instruction_budget_after_moving_pc_on_an_exception_stop)
     CHECK_EQ(e.backend()->getM68kRegs().pc, kSubRts);
 }
 
+// A pause delivered between frames must not let the frame that just ended
+// count against a frame budget armed during it.
+TEST(frame_budget_after_a_between_frame_stop_runs_a_whole_frame)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+
+    e.parkM68kAt(kHaltEntry);
+    e.backend()->resume();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    REQUIRE(e.pauseAndWait(1500));
+    REQUIRE(e.pauseReason() == StopReason::Halted);
+
+    e.parkM68kAt(kJsr);
+    const uint64_t f0 = e.host()->frameCount();
+    RunLimits lim;
+    lim.maxFrames = 1;
+    REQUIRE(runAndWait(e, lim));
+    CHECK(e.pauseReason() == StopReason::Budget);
+    CHECK(e.host()->frameCount() - f0 >= 1);             // a whole frame ran
+}
+
 TEST(frame_budget_stops_after_that_many_frames)
 {
     t::Emu e;

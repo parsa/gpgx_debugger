@@ -104,9 +104,6 @@ void EmuHost::run(std::string /*romPath*/)
 
         system_frame_gen(0);      // one field/frame; blocks in firePause on bp
         frames_.fetch_add(1);
-        // A halted or STOPped 68000 ran no instruction this frame, so a pause
-        // or step request is still pending: deliver it here instead.
-        backend_.serviceStoppedCpu();
         backend_.onFrameEnd();
 
         // Frame advance: run exactly N frames, then stop. An agent cannot
@@ -114,6 +111,11 @@ void EmuHost::run(std::string /*romPath*/)
         // emulator is not bound to the wall clock at all.
         if (framesLeft_.load() > 0 && framesLeft_.fetch_sub(1) == 1)
             backend_.requestPause(StopReason::FrameAdvance);
+
+        // A halted or STOPped 68000 ran no instruction this frame, so a pause
+        // or step request is still pending: deliver it here instead. Last, so
+        // budgets armed during this pause do not count the frame just done.
+        backend_.serviceStoppedCpu();
 
         if (frameSink_) {
             const t_bitmap& bm = ::bitmap;
