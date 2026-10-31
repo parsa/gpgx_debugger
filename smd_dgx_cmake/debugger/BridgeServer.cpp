@@ -889,6 +889,22 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
             if (seenStop() == s0) return "err could not reach an instruction boundary";
         }
         if (midInstruction()) return "err could not reach an instruction boundary";
+        // A save state replays exactly only from a frame boundary: mid-frame the
+        // scheduler's scanline and VDP timing belong to the interrupted frame.
+        // Run on to the end of the current frame first.
+        if (!statePath.empty()) {
+            for (int tries = 0; tries < 5 && !g->atFrameBoundary(); ++tries) {
+                g->requestFramePause();
+                const uint64_t s0 = seenStop();
+                const std::string res = handle("resume", client);
+                if (res.rfind("ok", 0) != 0) return res;
+                for (int i = 0; i < 3000 && seenStop() == s0; ++i) {
+                    if (stopFlag_.load()) return "err stopping";
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+            }
+            if (!g->atFrameBoundary()) return "err could not reach a frame boundary";
+        }
         bool stateOk = true;
         std::vector<uint8_t> before;
         // Everything that touches the machine happens on the emulation thread.

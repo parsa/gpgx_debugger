@@ -477,6 +477,7 @@ void GpgxBackend::serviceStoppedCpu()
     // This stop is not inside an instruction hook, so the next hook is the
     // instruction we are standing on, not the one after it: let it run.
     standingOnNext_ = true;
+    stopInInstr_ = false;
     firePause(m68k_get_reg(M68K_REG_PC), Cpu::M68K, -1,
               (stopped & kStopLevelHalt) ? StopReason::Halted : StopReason::Stopped);
 }
@@ -601,7 +602,7 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t value)
             hit = matchBreakpoint(type, addr, 2);                       // opcode word
             if (hit >= 0) why = StopReason::Breakpoint;
         }
-        if (why != StopReason::None) firePause(addr, Cpu::M68K, hit, why);
+        if (why != StopReason::None) { stopInInstr_ = true; firePause(addr, Cpu::M68K, hit, why); }
     } else if (type & (HOOK_M68K_R | HOOK_M68K_W)) {
         if (logOn_.load(std::memory_order_relaxed))
             logAccess(m68k.ppc & 0xFFFFFF, Cpu::M68K, AccessSpace::M68k, (type & HOOK_M68K_W) != 0, width, addr, value);
@@ -656,18 +657,27 @@ void GpgxBackend::armRun(const RunLimits& lim)
     run_ = lim;
     run_.returnAddr &= 0xFFFFFF;
     if (run_.stopAddr >= 0) run_.stopAddr &= 0xFFFFFF;
-    // Stopped inside an instruction hook, execCount_ already counts the
-    // instruction the CPU stands on. Stopped between frames (standingOnNext_),
-    // its hook has yet to run and will count it: start one later, so the
-    // budget is always instructions retired from here.
-    // Likewise while stopped on a caught exception: the faulting instruction
-    // was counted but never retires. Continuing finishes the exception and the
-    // handler's first instruction is counted by its own hook; moving PC makes
-    // the next hook the standing one (standingOnNext_, set when the stop ends).
-    const bool standing = standingOnNext_ || inExceptionStop_;
-    runStartExec_ = execCount_ + (standing ? 1 : 0);
+    // Budget = 68000 instructions retired from here. A stop taken inside a
+    // 68000 instruction (its exec hook, or one of its accesses) has already
+    // counted that instruction, which still retires. Any other stop (between
+    // frames, on the Z80, on a caught exception whose instruction never
+    // retires) leaves the next counted instruction unretired: start one later.
+    runStartExec_ = execCount_ + (stopInInstr_ ? 0 : 1);
     runFrames_ = 0;
     runActive_.store(lim.any());
+}
+
+void GpgxBackend::serviceFramePause()
+{
+    if (!framePauseReq_.exchange(false)) return;
+    // Between frames: the scheduler's per-frame state is fresh from here, so
+    // a save state loaded now replays exactly. The next 68000 hook is the
+    // instruction the CPU stands on.
+    stopInInstr_ = false;
+    standingOnNext_ = true;
+    atFrameBoundary_.store(true);
+    firePause(m68k_get_reg(M68K_REG_PC), Cpu::M68K, -1, StopReason::FrameAdvance);
+    atFrameBoundary_.store(false);
 }
 
 void GpgxBackend::onFrameEnd()
@@ -767,6 +777,7 @@ void GpgxBackend::watchHit(int bpId, uint32_t pc, Cpu cpu, AccessSpace space, bo
         lastAccess_.address = addr;
         lastAccess_.value   = width >= 4 ? value : value & ((1u << (8 * width)) - 1);
     }
+    stopInInstr_ = cpu == Cpu::M68K;           // a 68000 access: inside its instruction
     firePause(pc, cpu, bpId, StopReason::Watchpoint);
 }
 
@@ -816,10 +827,8 @@ void GpgxBackend::onM68kException(unsigned vector)
     if (excCb_) excCb_(x);
     if (vector < 64 && (excCatch_.load() >> vector) & 1) {
         const uint32_t before = m68k.pc;
-        excStopPc_ = before;
-        inExceptionStop_ = true;
+        stopInInstr_ = false;                   // the faulting instruction never retires
         firePause(x.pc, Cpu::M68K, -1, StopReason::Exception);
-        inExceptionStop_ = false;
         // Moving PC here abandons the vector (see m68ki_jump_vector), and the
         // CPU then stands on the new PC like after any other stop: the next
         // instruction hook must execute it, not stop on it.
@@ -1037,6 +1046,7 @@ void GpgxBackend::onZ80Exec(uint32_t pc)
     if (!brk) { hit = matchBreakpoint(HOOK_Z80_E, pc); brk = hit >= 0; }
     if (brk) {
         z80ResumeSkip_.store(int(pc));
+        stopInInstr_ = false;                   // the 68000 is between instructions
         firePause(pc, Cpu::Z80, hit, hit >= 0 ? StopReason::Breakpoint : StopReason::Step);
     }
 }

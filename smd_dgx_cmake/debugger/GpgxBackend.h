@@ -120,6 +120,12 @@ public:
     void disarmRun() { runActive_.store(false); }
     // The host calls this after every frame (frame budgets).
     void onFrameEnd();
+    // Pause at the next frame boundary (reason FrameAdvance), where loading a
+    // save state replays deterministically. The host calls serviceFramePause()
+    // between frames; atFrameBoundary() is true while paused there.
+    void requestFramePause() { framePauseReq_.store(true); }
+    void serviceFramePause();
+    bool atFrameBoundary() const { return atFrameBoundary_.load(); }
 
     // Hardware-wait overrides, off (empty) by default. While any are set the
     // core consults them on I/O-handler reads; empty uninstalls the filter.
@@ -197,10 +203,11 @@ private:
     // Set by a stop delivered between frames: the next instruction hook is the
     // instruction the CPU is standing on, and must execute rather than stop.
     bool standingOnNext_ = false;
-    // Stopped on a caught exception (emulation thread state, read by armRun
-    // while paused), and the PC at that moment (to tell whether it was moved).
-    bool     inExceptionStop_ = false;
-    uint32_t excStopPc_ = 0;
+    // Whether the current stop was taken inside a 68000 instruction (its exec
+    // hook or one of its accesses): that instruction is counted and retires.
+    bool stopInInstr_ = true;
+    std::atomic<bool> framePauseReq_ {false};
+    std::atomic<bool> atFrameBoundary_ {false};
 
     std::mutex codemapMutex_;
     std::map<uint32_t, uint32_t> codemap_;

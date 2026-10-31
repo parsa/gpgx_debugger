@@ -131,6 +131,26 @@ TEST(instruction_budget_after_moving_pc_on_an_exception_stop)
 
 // A pause delivered between frames must not let the frame that just ended
 // count against a frame budget armed during it.
+// Stopped on the Z80, the 68000 is between instructions: its next hook has
+// not run. The 68000 budget still counts instructions retired from here.
+TEST(instruction_budget_after_a_z80_stop)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    e.backend()->resume();                               // boot releases the Z80
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    REQUIRE(e.pauseAndWait());
+    REQUIRE(e.stepAndWait(Cpu::Z80));
+    REQUIRE(e.pauseCpu() == Cpu::Z80);
+
+    e.parkM68kAt(kJsr);
+    RunLimits budget;
+    budget.maxInstructions = 1;                          // the jsr
+    REQUIRE(runAndWait(e, budget));
+    CHECK(e.pauseReason() == StopReason::Budget);
+    CHECK_EQ(e.backend()->getM68kRegs().pc, kSubEntry);
+}
+
 // And when the stop on a caught exception is simply continued: resuming
 // finishes the exception, so the first instruction retired is the handler's.
 TEST(instruction_budget_after_continuing_an_exception_stop)

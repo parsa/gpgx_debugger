@@ -112,6 +112,8 @@ void EmuHost::run(std::string /*romPath*/)
         if (framesLeft_.load() > 0 && framesLeft_.fetch_sub(1) == 1)
             backend_.requestPause(StopReason::FrameAdvance);
 
+        backend_.serviceFramePause();
+
         // A halted or STOPped 68000 ran no instruction this frame, so a pause
         // or step request is still pending: deliver it here instead. Last, so
         // budgets armed during this pause do not count the frame just done.

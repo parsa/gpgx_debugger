@@ -822,9 +822,23 @@ TEST(bridge_runcase_from_a_save_state_is_deterministic)
     REQUIRE(raw.cmd("savestate " + path) == "ok");
     const std::string c = "runcase state=" + path + " pc=218 a7=fff000 frames=2";
     const std::string first = raw.cmd(c);
+    // Stop somewhere else in a frame before running the same case again: the
+    // result must not depend on where the previous run left the scheduler.
+    CHECK_STR(raw.cmd("runto instr=37"), "ok");
+    raw.cmd("wait 3000");
     const std::string second = raw.cmd(c);
     CHECK(first.rfind("ok reason=budget ", 0) == 0);
     CHECK_STR(second, first);
+
+    // Timing-sensitive: read the VDP H/V counter (move.w $C00008,d0; bra.s *).
+    const std::string hv = "runcase state=" + path + " pc=ff0100 a7=fff000 sr=2700 "
+                           "mem=ff0100:303900c0000860fe until=ff0106";
+    const std::string h1 = raw.cmd(hv);
+    CHECK_STR(raw.cmd("runto instr=53"), "ok");
+    raw.cmd("wait 3000");
+    const std::string h2 = raw.cmd(hv);
+    CHECK(h1.rfind("ok reason=address pc=ff0106 ", 0) == 0);
+    CHECK_STR(h2, h1);
     std::remove(path.c_str());
 }
 
