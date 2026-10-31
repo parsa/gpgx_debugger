@@ -567,7 +567,7 @@ void GpgxBackend::serviceStoppedCpu()
     firePause(m68k_get_reg(M68K_REG_PC), Cpu::M68K, -1,
               (stopped & kStopLevelHalt) ? StopReason::Halted : StopReason::Stopped);
 }
-void GpgxBackend::resume()  { paused_.store(false); if (resumeCb_) resumeCb_(); }
+void GpgxBackend::resume()  { beginRun(); paused_.store(false); if (resumeCb_) resumeCb_(); }
 void GpgxBackend::cancelRunRequests()
 {
     pauseReason_.store(0);
@@ -586,6 +586,7 @@ void GpgxBackend::armStepInto(Cpu cpu)
 void GpgxBackend::stepInto(Cpu cpu)
 {
     armStepInto(cpu);
+    beginRun();
     paused_.store(false);
 }
 
@@ -995,6 +996,7 @@ void GpgxBackend::firePause(uint32_t pc, Cpu cpu, int bpId, StopReason why)
     if (abandoned_.load()) return;      // shutting down: do not park the thread
     lastBpId_.store(bpId);
     lastReason_.store(uint8_t(why));
+    stopEpoch_.store(runEpoch_.load());
     {
         // This stop answers every request still pending — a pause, a step, a
         // frame-boundary pause — whichever of them it was meant for. Left

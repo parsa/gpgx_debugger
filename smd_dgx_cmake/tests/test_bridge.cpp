@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <thread>
 
 using namespace synth;
@@ -1171,15 +1172,29 @@ struct FakeIda {
     uint32_t pc = 0;                                 // where IDA believes it stopped
     int sink = -1;
     EmuHost* host;
+    std::condition_variable gateCv;
+    bool gateClosed = false;
+    void closeGate() { std::lock_guard<std::mutex> lk(mx); gateClosed = true; }
+    void openGate()  { { std::lock_guard<std::mutex> lk(mx); gateClosed = false; } gateCv.notify_all(); }
+    void pushStop(const DebugEvent& e) { sync.pushStop(e, e.runEpoch); }
 
     explicit FakeIda(EmuHost* h) : be(h->backend()), host(h)
     {
         sync.setPostContinue([this] { postContinue(); });
+        sync.setEpochSource([this] { return host->gpgx()->runEpoch(); });
         sink = h->addEventSink([this](const DebugEvent& e) {
-            if (e.type == DebugEvent::Type::Paused) sync.pushStop(e);
+            if (e.type != DebugEvent::Type::Paused) return;
+            // A test may hold the publication back, as a slow sink would.
+            std::unique_lock<std::mutex> lk(mx);
+            gateCv.wait(lk, [this] { return !gateClosed; });
+            lk.unlock();
+            pushStop(e);
         });
         EmuHost::HostMutations hm;
-        hm.resume = [this] { sync.run([this] { be->resume(); }); return true; };
+        hm.resume = [this] {
+            sync.run([this] { host->gpgx()->beginRun(); }, [this] { be->resume(); });
+            return true;
+        };
         h->setHostMutations(hm);
     }
     ~FakeIda() { host->setHostMutations({}); host->removeEventSink(sink); }
@@ -1524,4 +1539,37 @@ TEST(many_execute_breakpoints_cost_little)
     CHECK_EQ(w.emu.backend()->getM68kRegs().pc & 0xFFFFFF, 0x218u);
     raw.cmd("bpclear");
     raw.cmd("speed realtime");
+}
+
+// A stop is published to the host by a sink that runs after the machine is
+// already marked paused. A bridge client that sees the stop first and runs the
+// machine on must not leave the host to collect that stop afterwards.
+TEST(a_stop_published_late_is_not_collected_after_the_machine_ran_on)
+{
+    Wired w(49);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(49)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    FakeIda ida(w.emu.host());
+    REQUIRE(raw.cmd("resume").rfind("ok", 0) == 0);      // running; IDA running too
+    ida.closeGate();                                      // IDA's sink will be slow
+    REQUIRE(raw.cmd("pause") == "ok");
+    REQUIRE(raw.cmd("wait 3000").rfind("ok paused", 0) == 0);   // the bridge has it
+    std::thread resumer([&] { raw.cmd("resume"); });      // run on before IDA's copy lands
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ida.openGate();
+    resumer.join();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ida.freeMainThread();
+    CHECK(!w.emu.backend()->isPaused());
+    CHECK(!ida.suspended);                                // never on the stale stop
+    REQUIRE(raw.cmd("pause") == "ok");
+    REQUIRE(raw.cmd("wait 3000").rfind("ok paused", 0) == 0);
+    for (int i = 0; i < 200 && !ida.suspended; ++i) {
+        ida.freeMainThread();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(ida.suspended);
+    CHECK_EQ(ida.pc, w.emu.backend()->getM68kRegs().pc & 0xFFFFFF);
 }

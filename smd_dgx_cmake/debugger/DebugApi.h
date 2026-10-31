@@ -64,6 +64,7 @@ struct DebugEvent {
     ExceptionInfo exc;          // Exception, or Paused with reason Exception
     AccessInfo access;          // Paused with reason Watchpoint
     uint64_t stopSeq = 0;       // monotonic; distinguishes a new stop from a seen one
+    uint64_t runEpoch = 0;      // Paused: the run it ended (GpgxBackend::runEpoch)
     std::map<uint32_t, uint32_t> changed;   // executed pc -> predecessor pc
 };
 

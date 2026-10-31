@@ -304,7 +304,7 @@ void on_emu_event(const DebugEvent& ev)
             }
         }
         ida_ev.ea = ev.pc;
-        g_sync.pushStop(ida_ev);
+        g_sync.pushStop(ida_ev, ev.runEpoch);
         break;
     case DebugEvent::Type::Stopped:
         apply_codemap(ev.changed);
@@ -515,7 +515,8 @@ void cancel_continue_requests(bool close)
 bool host_resume()
 {
     if (!g_host) return false;
-    g_sync.run([] { if (g_host) g_host->backend()->resume(); });
+    g_sync.run([] { if (g_host) g_host->gpgx()->beginRun(); },
+               [] { if (g_host) g_host->backend()->resume(); });
     return true;
 }
 
@@ -1131,6 +1132,7 @@ drc_t start_process(const char* path, const char* input_path)
     stop_audio();
     g_sync.clear();
     g_sync.setPostContinue(post_continue);
+    g_sync.setEpochSource([] { return g_host ? g_host->gpgx()->runEpoch() : uint64_t(0); });
     cancel_continue_requests(false);
 
     g_host->addEventSink(on_emu_event);

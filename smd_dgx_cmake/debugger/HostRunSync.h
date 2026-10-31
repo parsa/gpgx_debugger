@@ -36,15 +36,27 @@ public:
         std::lock_guard<std::mutex> lk(mx_);
         post_ = std::move(p);
     }
+    // The emulator's current run epoch (GpgxBackend::runEpoch). A stop is
+    // published by a sink that may run after the machine is already marked
+    // paused, so a bridge client can run the machine on before the stop is
+    // queued here; its epoch is then out of date and the host never sees it.
+    void setEpochSource(std::function<uint64_t()> f)
+    {
+        std::lock_guard<std::mutex> lk(mx_);
+        epochNow_ = std::move(f);
+    }
 
-    // Emulation thread: a stop the host must learn about, or any other event.
-    void pushStop(const Event& e)  { push(e, true); }
-    void pushOther(const Event& e) { push(e, false); }
+    // Emulation thread: a stop the host must learn about (with the run epoch
+    // it ended), or any other event.
+    void pushStop(const Event& e, uint64_t epoch = 0) { push(e, true, epoch); }
+    void pushOther(const Event& e) { push(e, false, 0); }
 
     // The host's poll. A stop handed over is the host's until it resumes.
     bool retrieve(Event* out, bool* more)
     {
         std::lock_guard<std::mutex> lk(mx_);
+        while (!q_.empty() && q_.front().stop && epochNow_ && q_.front().epoch != epochNow_())
+            q_.pop_front();                     // run past before it was queued
         if (q_.empty()) return false;
         Item it = std::move(q_.front());
         q_.pop_front();
@@ -72,15 +84,17 @@ public:
         return !held_ || !movedOn_;
     }
 
-    // A bridge client runs the machine. resumeBackend runs after the state
-    // change, outside the lock; postContinue too, at most once per held stop.
-    void run(const std::function<void()>& resumeBackend)
+    // A bridge client runs the machine. beginRun (a new run epoch) happens
+    // under the lock, so a stop collected after this is never from before it;
+    // resumeBackend and postContinue run after, outside it.
+    void run(const std::function<void()>& beginRun, const std::function<void()>& resumeBackend)
     {
         PostContinue post;
         {
             std::lock_guard<std::mutex> lk(mx_);
             for (auto it = q_.begin(); it != q_.end();)
                 it = it->stop ? q_.erase(it) : it + 1;
+            if (beginRun) beginRun();
             if (held_) {
                 movedOn_ = true;
                 if (!continueWanted_) { continueWanted_ = true; post = post_; }
@@ -105,16 +119,17 @@ public:
     }
 
 private:
-    struct Item { Event ev; bool stop; };
-    void push(const Event& e, bool stop)
+    struct Item { Event ev; bool stop; uint64_t epoch; };
+    void push(const Event& e, bool stop, uint64_t epoch)
     {
         std::lock_guard<std::mutex> lk(mx_);
-        q_.push_back(Item{e, stop});
+        q_.push_back(Item{e, stop, epoch});
     }
 
     mutable std::mutex mx_;
     std::deque<Item>   q_;
     PostContinue       post_;
+    std::function<uint64_t()> epochNow_;
     bool held_ = false;            // the host collected a stop and has not resumed
     bool movedOn_ = false;         // ...and a bridge client ran the machine since
     bool continueWanted_ = false;  // a continue was posted to the host for it

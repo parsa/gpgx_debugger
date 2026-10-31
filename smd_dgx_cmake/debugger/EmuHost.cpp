@@ -47,6 +47,7 @@ bool EmuHost::start(const std::string& romPath)
         if (ev.reason == StopReason::Exception) ev.exc = backend_.lastException();
         if (ev.reason == StopReason::Watchpoint) ev.access = backend_.lastAccess();
         ev.stopSeq = stops_.fetch_add(1) + 1;
+        ev.runEpoch = backend_.lastStopEpoch();
         ev.changed = backend_.takeCodemap();
         emitEvent(ev);
     });
