@@ -97,6 +97,14 @@ public:
     // The access behind the current Watchpoint stop.
     AccessInfo lastAccess() const;
 
+    // Access log: every memory/I/O access matching cfg.ranges (68000 bus, Z80
+    // bus, VDP memories), with the instruction that made it. Starting clears
+    // it. Bounded by cfg.capacity; further matches only count as dropped.
+    void      startAccessLog(const AccessLogConfig& cfg);
+    void      stopAccessLog();
+    bool      accessLogEnabled() const { return logOn_.load(std::memory_order_relaxed); }
+    AccessLog accessLog() const;
+
     // Why the current stop happened. Read after a pause event.
     StopReason lastStopReason() const { return StopReason(lastReason_.load()); }
 
@@ -166,6 +174,13 @@ private:
     mutable std::mutex    excMx_;
     ExceptionInfo         lastExc_;
     AccessInfo            lastAccess_;   // guarded by excMx_
+
+    std::atomic<bool>     logOn_ {false};
+    mutable std::mutex    logMx_;
+    AccessLogConfig       logCfg_;       // guarded by logMx_
+    AccessLog             log_;          // guarded by logMx_
+    void logAccess(uint32_t pc, Cpu cpu, AccessSpace space, bool write,
+                   int width, uint32_t addr, uint32_t value);
     void watchHit(int bpId, uint32_t pc, Cpu cpu, AccessSpace space, bool write,
                   int width, uint32_t addr, uint32_t value);
     std::mutex            callstackMutex_;

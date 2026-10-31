@@ -641,6 +641,30 @@ TEST(bridge_wait_names_every_stop_reason)
     CHECK(st.find(" reason=pause") != std::string::npos);
 }
 
+TEST(bridge_returns_the_access_log)
+{
+    Wired w(26);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(26)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+
+    CHECK_STR(raw.cmd("log"), "ok enabled=0 entries=0 dropped=0");
+    CHECK(raw.cmd("log on m68k:ff4276").rfind("err usage", 0) == 0);
+    CHECK_STR(raw.cmd("log on cap=8 m68k:ff4276-ff4279"), "ok");
+    raw.cmd("bpadd x 250 250");
+    w.emu.parkM68kAt(kDataEntry);
+    CHECK_STR(raw.cmd("resume"), "ok");
+    CHECK(raw.cmd("wait 3000").rfind("ok paused pc=250", 0) == 0);
+    CHECK_STR(raw.cmd("log"), "ok enabled=1 entries=2 dropped=0");
+    CHECK_STR(raw.cmd("log get"),
+              "ok total=2 dropped=0 start=0 240,m68k,w,m68k,ff4276,4,12345678 24a,m68k,r,m68k,ff4276,4,12345678");
+    CHECK_STR(raw.cmd("log get 1 1"), "ok total=2 dropped=0 start=1 24a,m68k,r,m68k,ff4276,4,12345678");
+    CHECK_STR(raw.cmd("log off"), "ok");
+    CHECK_STR(raw.cmd("log"), "ok enabled=0 entries=2 dropped=0");
+    raw.cmd("bpclear");
+}
+
 TEST(bridge_falls_through_to_the_backend_without_a_host)
 {
     // The standalone app installs nothing, and a host may decline any single

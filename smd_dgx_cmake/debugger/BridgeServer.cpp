@@ -738,6 +738,64 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
     // behind its back its UI stays stuck on "suspended" forever. Asking IDA to
     // continue instead means IDA reaches the backend by its own path and its
     // state is right by construction.
+    // Opt-in access log. "log on [cap=N] [space:start-end ...]" (space m68k,
+    // z80 or vdp; hex addresses; no range = everything) starts it afresh;
+    // "log off" stops it; "log" reports its state; "log get [start] [count]"
+    // returns entries pc,cpu,r|w,space,addr,size,value.
+    if (cmd == "log") {
+        static const char* kUsage =
+            "err usage: log [on [cap=N] [m68k|z80|vdp:start-end ...] | off | get [start] [count]]";
+        GpgxBackend* g = host_->gpgx();
+        const std::string sub = arg();
+        if (sub == "on") {
+            AccessLogConfig cfg;
+            for (std::string tok = arg(); !tok.empty(); tok = arg()) {
+                if (tok.rfind("cap=", 0) == 0) {
+                    uint32_t cap = 0;
+                    if (!parseNum(tok.substr(4), cap, 10) || cap == 0) return kUsage;
+                    cfg.capacity = cap;
+                    continue;
+                }
+                const size_t colon = tok.find(':'), dash = tok.find('-');
+                if (colon == std::string::npos || dash == std::string::npos || dash < colon) return kUsage;
+                AccessRange r;
+                const std::string space = tok.substr(0, colon);
+                if (space == "m68k") r.space = AccessSpace::M68k;
+                else if (space == "z80") r.space = AccessSpace::Z80;
+                else if (space == "vdp") r.space = AccessSpace::Vdp;
+                else return kUsage;
+                if (!parseNum(tok.substr(colon + 1, dash - colon - 1), r.start) ||
+                    !parseNum(tok.substr(dash + 1), r.end) || r.end < r.start)
+                    return kUsage;
+                cfg.ranges.push_back(r);
+            }
+            g->startAccessLog(cfg);
+            return "ok";
+        }
+        if (sub == "off") { if (!arg().empty()) return kUsage; g->stopAccessLog(); return "ok"; }
+        const AccessLog log = g->accessLog();
+        std::ostringstream o;
+        if (sub.empty()) {
+            o << "ok enabled=" << (log.enabled ? 1 : 0) << " entries=" << log.entries.size()
+              << " dropped=" << log.dropped;
+            return o.str();
+        }
+        if (sub != "get") return kUsage;
+        uint32_t start = 0, count = 4096;
+        if (!optNum(arg(), start, 10) || !optNum(arg(), count, 10)) return kUsage;
+        if (count > 65536) count = 65536;
+        o << "ok total=" << log.entries.size() << " dropped=" << log.dropped << " start=" << start;
+        for (size_t i = start; i < log.entries.size() && i < size_t(start) + count; ++i) {
+            const AccessLogEntry& e = log.entries[i];
+            const AccessInfo& a = e.access;
+            o << " " << std::hex << e.pc << "," << (e.cpu == Cpu::Z80 ? "z80" : "m68k") << ","
+              << (a.write ? "w" : "r") << ","
+              << (a.space == AccessSpace::Z80 ? "z80" : a.space == AccessSpace::Vdp ? "vdp" : "m68k")
+              << "," << a.address << "," << std::dec << unsigned(a.size) << "," << std::hex << a.value;
+        }
+        return o.str();
+    }
+
     // Which 68000 exceptions stop the machine (every one is reported as an
     // event regardless). "catch" alone reports the mask; bit n = vector n.
     if (cmd == "catch") {

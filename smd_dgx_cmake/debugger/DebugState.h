@@ -151,6 +151,27 @@ struct AccessInfo {
     uint32_t    value   = 0;      // value read or written
 };
 
+// Opt-in access log (GpgxBackend::startAccessLog). Off, it costs one relaxed
+// atomic load per access the core already reports to the hook.
+struct AccessRange {
+    AccessSpace space = AccessSpace::M68k;
+    uint32_t    start = 0, end = 0;          // inclusive; overlap with the access matches
+};
+struct AccessLogConfig {
+    size_t capacity = 65536;                 // entries kept; later ones are counted as dropped
+    std::vector<AccessRange> ranges;         // empty = every access in every space
+};
+struct AccessLogEntry {
+    uint32_t   pc  = 0;                      // instruction that made the access
+    Cpu        cpu = Cpu::M68K;
+    AccessInfo access;
+};
+struct AccessLog {
+    bool     enabled = false;
+    uint64_t dropped = 0;                    // matching accesses past capacity
+    std::vector<AccessLogEntry> entries;     // in execution order
+};
+
 // A 68000 exception, as the core raised it.
 enum class ExcAccess : uint8_t { None = 0, Read, Write, Fetch };
 struct ExceptionInfo {

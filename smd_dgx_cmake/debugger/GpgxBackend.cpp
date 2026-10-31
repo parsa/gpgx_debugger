@@ -577,8 +577,10 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t value)
         }
         if (why != StopReason::None) firePause(addr, Cpu::M68K, hit, why);
     } else if (type & (HOOK_M68K_R | HOOK_M68K_W)) {
+        if (logOn_.load(std::memory_order_relaxed))
+            logAccess(m68k.ppc & 0xFFFFFF, Cpu::M68K, AccessSpace::M68k, (type & HOOK_M68K_W) != 0, width, addr, value);
         const int hit = matchBreakpoint(type, addr, width);
-        if (hit >= 0) watchHit(hit, lastPc_, Cpu::M68K, AccessSpace::M68k, (type & HOOK_M68K_W) != 0,
+        if (hit >= 0) watchHit(hit, m68k.ppc & 0xFFFFFF, Cpu::M68K, AccessSpace::M68k, (type & HOOK_M68K_W) != 0,
                                width, addr, value);
     } else if (type & HOOK_M68K_EXC) {
         onM68kException(value);
@@ -588,6 +590,8 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t value)
         // Report the Z80's own PC, not the 68000's: a sound driver writing to
         // its work RAM is a Z80 event, and stopping at a 68000 address would
         // point the user at code that has nothing to do with it.
+        if (logOn_.load(std::memory_order_relaxed))
+            logAccess(lastPcZ80_, Cpu::Z80, AccessSpace::Z80, (type & HOOK_Z80_W) != 0, width, addr & 0xFFFF, value);
         const int hit = matchBreakpoint(type, addr & 0xFFFF, width);
         if (hit >= 0) watchHit(hit, lastPcZ80_, Cpu::Z80, AccessSpace::Z80, (type & HOOK_Z80_W) != 0,
                                width, addr & 0xFFFF, value);
@@ -598,11 +602,62 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t value)
         uint32_t linear = addr & 0xFFFF;
         if (type & (HOOK_CRAM_R  | HOOK_CRAM_W))  linear += VDP_BP_CRAM;
         else if (type & (HOOK_VSRAM_R | HOOK_VSRAM_W)) linear += VDP_BP_VSRAM;
+        if (logOn_.load(std::memory_order_relaxed))
+            logAccess(m68k.ppc & 0xFFFFFF, Cpu::M68K, AccessSpace::Vdp,
+                      (type & (HOOK_VRAM_W | HOOK_CRAM_W | HOOK_VSRAM_W)) != 0, width, linear, value);
         const int hit = matchBreakpoint(type, linear, width);
-        if (hit >= 0) watchHit(hit, lastPc_, Cpu::M68K, AccessSpace::Vdp,
+        if (hit >= 0) watchHit(hit, m68k.ppc & 0xFFFFFF, Cpu::M68K, AccessSpace::Vdp,
                                (type & (HOOK_VRAM_W | HOOK_CRAM_W | HOOK_VSRAM_W)) != 0,
                                width, linear, value);
     }
+}
+
+void GpgxBackend::startAccessLog(const AccessLogConfig& cfg)
+{
+    std::lock_guard<std::mutex> lk(logMx_);
+    logCfg_ = cfg;
+    if (logCfg_.capacity > (size_t(1) << 22)) logCfg_.capacity = size_t(1) << 22;
+    log_ = AccessLog{};
+    log_.enabled = true;
+    log_.entries.reserve(std::min<size_t>(logCfg_.capacity, 4096));
+    logOn_.store(true);
+}
+
+void GpgxBackend::stopAccessLog()
+{
+    logOn_.store(false);
+    std::lock_guard<std::mutex> lk(logMx_);
+    log_.enabled = false;
+}
+
+AccessLog GpgxBackend::accessLog() const
+{
+    std::lock_guard<std::mutex> lk(logMx_);
+    return log_;
+}
+
+void GpgxBackend::logAccess(uint32_t pc, Cpu cpu, AccessSpace space, bool write,
+                            int width, uint32_t addr, uint32_t value)
+{
+    std::lock_guard<std::mutex> lk(logMx_);
+    if (!log_.enabled) return;
+    if (!logCfg_.ranges.empty()) {
+        const uint32_t last = addr + uint32_t(width > 0 ? width - 1 : 0);
+        bool hit = false;
+        for (const auto& r : logCfg_.ranges)
+            if (r.space == space && last >= r.start && addr <= r.end) { hit = true; break; }
+        if (!hit) return;
+    }
+    if (log_.entries.size() >= logCfg_.capacity) { ++log_.dropped; return; }
+    AccessLogEntry e;
+    e.pc  = pc & (cpu == Cpu::Z80 ? 0xFFFF : 0xFFFFFF);
+    e.cpu = cpu;
+    e.access.space   = space;
+    e.access.write   = write;
+    e.access.size    = uint8_t(width);
+    e.access.address = addr;
+    e.access.value   = width >= 4 ? value : value & ((1u << (8 * width)) - 1);
+    log_.entries.push_back(e);
 }
 
 AccessInfo GpgxBackend::lastAccess() const
