@@ -870,6 +870,20 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         // an older one, before the baseline below is taken.
         const std::string settled = settlePaused(client);
         if (!settled.empty()) return settled;
+        // A watchpoint or caught-exception stop sits inside an unfinished
+        // instruction (or exception), which would complete over the case's
+        // state on resume. Step to the next instruction boundary first.
+        for (int tries = 0; tries < 8; ++tries) {
+            const StopReason r = g->lastStopReason();
+            if (r != StopReason::Watchpoint && r != StopReason::Exception) break;
+            const uint64_t s0 = seenStop();
+            be->stepInto(Cpu::M68K);
+            for (int i = 0; i < 2000 && seenStop() == s0; ++i) {
+                if (stopFlag_.load()) return "err stopping";
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if (seenStop() == s0) return "err could not reach an instruction boundary";
+        }
         bool stateOk = true;
         std::vector<uint8_t> before;
         // Everything that touches the machine happens on the emulation thread.

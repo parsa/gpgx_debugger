@@ -762,6 +762,27 @@ TEST(bridge_runcase_reports_ram_diff_and_access_log)
     CHECK(b.rfind("ok reason=budget pc=218 ", 0) == 0);                 // nop, bra.s back to the jsr
 }
 
+// Stopped by a watchpoint, the machine is inside an unfinished instruction.
+// A case set up there must not be clobbered when that instruction completes.
+TEST(bridge_runcase_after_a_watchpoint_stop_keeps_its_registers)
+{
+    Wired w(32);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(32)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+
+    raw.cmd("bpadd r ff4276 ff4279");
+    w.emu.parkM68kAt(kDataEntry);
+    CHECK_STR(raw.cmd("resume"), "ok");
+    REQUIRE(raw.cmd("wait 3000").find(" reason=watchpoint access=read") != std::string::npos);
+    raw.cmd("bpclear");
+
+    const std::string r = raw.cmd("runcase pc=300 a7=fff000 sr=2700 d0=deadbeef until=302");
+    CHECK(r.rfind("ok reason=address pc=302 ", 0) == 0);
+    CHECK(r.find(" d0=deadbeef ") != std::string::npos);
+}
+
 TEST(bridge_runcase_from_a_save_state_is_deterministic)
 {
     Wired w(30);
