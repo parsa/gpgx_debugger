@@ -14,6 +14,7 @@ add_executable(smd_dgx_tests
   test_subscriptions.cpp
   test_cpu_state.cpp
   test_exceptions.cpp
+  test_stop_reasons.cpp
   test_input.c          # headless osd_input_update, as every other host has
   test_harness.h
   synth_rom.h

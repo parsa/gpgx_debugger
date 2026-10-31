@@ -255,7 +255,12 @@ void on_emu_event(const DebugEvent& ev)
         if (g_audio) g_audio->pause(true);
         apply_codemap(ev.changed);
         {
-            const std::string why = describeStop(ev);
+            // The bridge's wait line carries pc/cpu/bp itself; IDA scripts get
+            // them here too.
+            const std::string why = describeStop(ev)
+                + " pc=" + hexDigits(ev.pc & 0xFFFFFF, 6)
+                + " cpu=" + (ev.cpu == Cpu::Z80 ? "z80" : "m68k")
+                + " bp=" + std::to_string(ev.bpId);
             {
                 std::lock_guard<std::mutex> lock(g_stopMx);
                 g_lastStop = why;

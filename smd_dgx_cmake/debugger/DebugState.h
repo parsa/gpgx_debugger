@@ -141,6 +141,16 @@ enum class StopReason : uint8_t {
     Budget,         // an instruction or frame budget ran out
 };
 
+// The memory access that triggered a watchpoint.
+enum class AccessSpace : uint8_t { M68k = 0, Z80, Vdp };
+struct AccessInfo {
+    AccessSpace space   = AccessSpace::M68k;
+    bool        write   = false;
+    uint8_t     size    = 0;      // bytes
+    uint32_t    address = 0;      // bus address (Z80: 16-bit; VDP: linear VDP space)
+    uint32_t    value   = 0;      // value read or written
+};
+
 // A 68000 exception, as the core raised it.
 enum class ExcAccess : uint8_t { None = 0, Read, Write, Fetch };
 struct ExceptionInfo {

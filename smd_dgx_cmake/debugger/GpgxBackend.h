@@ -94,6 +94,8 @@ public:
     void     setExceptionCatch(uint64_t vectors) { excCatch_.store(vectors); }
     uint64_t exceptionCatch() const { return excCatch_.load(); }
     ExceptionInfo lastException() const;
+    // The access behind the current Watchpoint stop.
+    AccessInfo lastAccess() const;
 
     // Why the current stop happened. Read after a pause event.
     StopReason lastStopReason() const { return StopReason(lastReason_.load()); }
@@ -163,6 +165,9 @@ private:
     std::atomic<uint64_t> excCatch_ {0};
     mutable std::mutex    excMx_;
     ExceptionInfo         lastExc_;
+    AccessInfo            lastAccess_;   // guarded by excMx_
+    void watchHit(int bpId, uint32_t pc, Cpu cpu, AccessSpace space, bool write,
+                  int width, uint32_t addr, uint32_t value);
     std::mutex            callstackMutex_;
     std::vector<uint32_t> callstack_;
     std::vector<uint32_t> callstackZ80_;

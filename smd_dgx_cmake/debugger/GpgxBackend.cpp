@@ -578,7 +578,8 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t value)
         if (why != StopReason::None) firePause(addr, Cpu::M68K, hit, why);
     } else if (type & (HOOK_M68K_R | HOOK_M68K_W)) {
         const int hit = matchBreakpoint(type, addr, width);
-        if (hit >= 0) firePause(lastPc_, Cpu::M68K, hit, StopReason::Watchpoint);
+        if (hit >= 0) watchHit(hit, lastPc_, Cpu::M68K, AccessSpace::M68k, (type & HOOK_M68K_W) != 0,
+                               width, addr, value);
     } else if (type & HOOK_M68K_EXC) {
         onM68kException(value);
     } else if (type & HOOK_Z80_E) {
@@ -588,7 +589,8 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t value)
         // its work RAM is a Z80 event, and stopping at a 68000 address would
         // point the user at code that has nothing to do with it.
         const int hit = matchBreakpoint(type, addr & 0xFFFF, width);
-        if (hit >= 0) firePause(lastPcZ80_, Cpu::Z80, hit, StopReason::Watchpoint);
+        if (hit >= 0) watchHit(hit, lastPcZ80_, Cpu::Z80, AccessSpace::Z80, (type & HOOK_Z80_W) != 0,
+                               width, addr & 0xFFFF, value);
     } else if (type & (HOOK_VRAM_R | HOOK_VRAM_W | HOOK_CRAM_R | HOOK_CRAM_W |
                        HOOK_VSRAM_R | HOOK_VSRAM_W)) {
         // The core reports an offset within one VDP memory; breakpoints live in
@@ -597,8 +599,30 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t value)
         if (type & (HOOK_CRAM_R  | HOOK_CRAM_W))  linear += VDP_BP_CRAM;
         else if (type & (HOOK_VSRAM_R | HOOK_VSRAM_W)) linear += VDP_BP_VSRAM;
         const int hit = matchBreakpoint(type, linear, width);
-        if (hit >= 0) firePause(lastPc_, Cpu::M68K, hit, StopReason::Watchpoint);
+        if (hit >= 0) watchHit(hit, lastPc_, Cpu::M68K, AccessSpace::Vdp,
+                               (type & (HOOK_VRAM_W | HOOK_CRAM_W | HOOK_VSRAM_W)) != 0,
+                               width, linear, value);
     }
+}
+
+AccessInfo GpgxBackend::lastAccess() const
+{
+    std::lock_guard<std::mutex> lk(excMx_);
+    return lastAccess_;
+}
+
+void GpgxBackend::watchHit(int bpId, uint32_t pc, Cpu cpu, AccessSpace space, bool write,
+                           int width, uint32_t addr, uint32_t value)
+{
+    {
+        std::lock_guard<std::mutex> lk(excMx_);
+        lastAccess_.space   = space;
+        lastAccess_.write   = write;
+        lastAccess_.size    = uint8_t(width);
+        lastAccess_.address = addr;
+        lastAccess_.value   = width >= 4 ? value : value & ((1u << (8 * width)) - 1);
+    }
+    firePause(pc, cpu, bpId, StopReason::Watchpoint);
 }
 
 ExceptionInfo GpgxBackend::lastException() const

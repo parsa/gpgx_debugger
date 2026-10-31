@@ -592,6 +592,55 @@ TEST(bridge_reports_and_catches_exceptions)
     CHECK_STR(raw.cmd("pause"), "ok");
 }
 
+// Each stop kind, as an agent sees it: the old leading fields unchanged, the
+// reason (and what it carries) appended.
+TEST(bridge_wait_names_every_stop_reason)
+{
+    Wired w(25);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(25)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+
+    auto waitStop = [&](const char* expectTail) {
+        const std::string r = raw.cmd("wait 3000");
+        CHECK(r.rfind("ok paused pc=", 0) == 0);
+        CHECK(r.find(" cpu=m68k bp=") != std::string::npos);
+        CHECK(r.find(" seq=") != std::string::npos);
+        if (r.find(expectTail) == std::string::npos) CHECK_STR(r, expectTail);
+        return r;
+    };
+
+    w.emu.parkM68kAt(kJsr);
+    CHECK(raw.cmd("stepi").rfind("ok", 0) == 0);
+    waitStop(" reason=step");
+
+    const std::string add = raw.cmd("bpadd x 300 300");
+    REQUIRE(add.rfind("ok ", 0) == 0);
+    const std::string id = add.substr(3);
+    w.emu.parkM68kAt(kJsr);
+    CHECK_STR(raw.cmd("resume"), "ok");
+    waitStop(("bp=" + id + " seq=").c_str());
+    CHECK_STR(raw.cmd("bpclear"), "ok");
+
+    raw.cmd("bpadd w ff4276 ff4279");
+    w.emu.parkM68kAt(kDataEntry);
+    CHECK_STR(raw.cmd("resume"), "ok");
+    waitStop(" reason=watchpoint access=write space=m68k addr=FF4276 size=4 value=12345678");
+    CHECK_STR(raw.cmd("bpclear"), "ok");
+
+    w.emu.parkM68kAt(kJsr);
+    CHECK_STR(raw.cmd("frameadv 1"), "ok");
+    waitStop(" reason=frame");
+
+    CHECK_STR(raw.cmd("resume"), "ok");
+    CHECK_STR(raw.cmd("pause"), "ok");
+    waitStop(" reason=pause");
+    const std::string st = raw.cmd("status");
+    CHECK(st.rfind("ok running=1 paused=1 pc=", 0) == 0);
+    CHECK(st.find(" reason=pause") != std::string::npos);
+}
+
 TEST(bridge_falls_through_to_the_backend_without_a_host)
 {
     // The standalone app installs nothing, and a host may decline any single

@@ -62,6 +62,7 @@ struct DebugEvent {
     int      bpId = -1;         // breakpoint that caused it, or -1
     StopReason reason = StopReason::None;   // Paused: why
     ExceptionInfo exc;          // Exception, or Paused with reason Exception
+    AccessInfo access;          // Paused with reason Watchpoint
     uint64_t stopSeq = 0;       // monotonic; distinguishes a new stop from a seen one
     std::map<uint32_t, uint32_t> changed;   // executed pc -> predecessor pc
 };
@@ -98,6 +99,14 @@ inline std::string describeStop(const DebugEvent& ev)
     std::string s = "reason=";
     s += stopReasonName(ev.reason);
     if (ev.reason == StopReason::Exception) s += " " + describeException(ev.exc);
+    if (ev.reason == StopReason::Watchpoint) {
+        const AccessInfo& a = ev.access;
+        const char* space = a.space == AccessSpace::Z80 ? "z80" : a.space == AccessSpace::Vdp ? "vdp" : "m68k";
+        s += std::string(" access=") + (a.write ? "write" : "read") + " space=" + space
+           + " addr=" + hexDigits(a.address & 0xFFFFFF, 6)
+           + " size=" + std::to_string(unsigned(a.size))
+           + " value=" + hexDigits(a.value, a.size >= 4 ? 8 : a.size == 2 ? 4 : 2);
+    }
     return s;
 }
 
