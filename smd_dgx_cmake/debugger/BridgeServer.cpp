@@ -941,6 +941,14 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         // scheduler's scanline and VDP timing belong to the interrupted frame.
         // Run on to the end of the current frame first.
         if (!statePath.empty()) {
+            // Whatever that run does is replaced by the state: nothing on the
+            // way (a breakpoint, a caught fault the previous case's code keeps
+            // raising) may stop it short of the boundary.
+            struct Transit {
+                GpgxBackend* g;
+                explicit Transit(GpgxBackend* b) : g(b) { g->setTransit(true); }
+                ~Transit() { g->setTransit(false); }
+            } transit(g);
             for (int tries = 0; tries < 5 && !g->atFrameBoundary(); ++tries) {
                 g->requestFramePause();
                 const uint64_t s0 = seenStop();

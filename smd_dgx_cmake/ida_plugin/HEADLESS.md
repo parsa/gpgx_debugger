@@ -113,6 +113,12 @@ Return values to expect: while IDA is suspended, `wait_for_next_event(WFNE_ANY, 
 
 The emulator runs at the console's 50/60 Hz by default. A bridge client that records or replays cases nobody watches can send `speed max` (frames back to back, no audio) and `speed realtime` to go back; `status` ends with `speed=`. Only the wall clock changes.
 
+## Replaying cases from save states
+
+`runcase state=<file>` loads its state at a frame boundary, so a case replays the same whatever the previous one left behind: it first runs the machine on to the end of the current frame, and that run's outcome is discarded by the load. Breakpoints, watchpoints and caught exceptions (`catch`) do not stop that run (a previous case can leave code that faults or hits a breakpoint over and over); they apply again from the case's own start.
+
+A bare `loadstate` loads into the machine where it stands. Stopped mid-frame, or inside an instruction or a caught exception, the rest of that frame (and of that instruction or exception) then runs on the loaded state, which can leave the game in a state it never reaches by itself. To reset between cases, let `runcase state=` do it rather than `pause` plus `loadstate`.
+
 ## What was fixed
 
 Previously the macOS plugin was linked with `-undefined dynamic_lookup`, relying on GUI IDA to preload its namespaced Qt libraries. Headless IDA did not preload Qt, so its loader rejected the plugin with:

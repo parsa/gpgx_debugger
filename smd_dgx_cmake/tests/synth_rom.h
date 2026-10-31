@@ -57,6 +57,9 @@ constexpr uint32_t kIllegalEntry = 0x0520;
 constexpr uint32_t kTrapEntry    = 0x0530;
 constexpr uint32_t kAddrErrEntry = 0x0540;
 constexpr uint32_t kExcHandler   = 0x0600;
+// Trap #1 (vector 33) returns straight away: `trap #1; bra.s *-2` in RAM then
+// traps forever, like a game handler that keeps returning into its fault.
+constexpr uint32_t kRteHandler   = 0x0610;
 
 // Z80 bus wait, as a game does it on a Z80 still held in reset (power on):
 //   0560  33FC 0000 00A11200   move.w #$0000,$A11200 ; assert Z80 /RESET
@@ -148,6 +151,8 @@ inline std::vector<uint8_t> buildRom()
     for (uint32_t v = 2; v < 64; ++v) put32be(rom, v * 4, kExcHandler);
     put16be(rom, kExcHandler, 0x4E71);         // nop
     put16be(rom, kExcHandler + 2, 0x60FE);     // bra.s *
+    put32be(rom, 33 * 4, kRteHandler);         // trap #1 vector
+    put16be(rom, kRteHandler, 0x4E73);         // rte
     put16be(rom, kIllegalEntry, 0x4AFC);       // illegal
     put16be(rom, kTrapEntry, 0x4E40);          // trap #0
     put16be(rom, kAddrErrEntry + 0, 0x3038);   // move.w ($0001).w,d0

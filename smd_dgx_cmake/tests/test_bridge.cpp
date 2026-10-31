@@ -1794,3 +1794,42 @@ TEST(a_fresh_run_drops_interrupted_run_limits)
     if (r.find(" reason=frame") == std::string::npos) std::printf("    wait: %s\n", r.c_str());
     CHECK(r.find(" reason=frame") != std::string::npos);
 }
+
+// runcase state= first runs the machine to the end of its frame, from wherever
+// the previous case left it; the state load then discards that run. Stops on
+// the way (a caught fault the old code keeps raising, a breakpoint it keeps
+// hitting) are not the case's and must not keep it from the frame boundary.
+TEST(runcase_reaches_the_frame_boundary_through_repeated_stops)
+{
+    Wired w(56);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(56)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    const char* tmp = std::getenv("TMPDIR");
+    const std::string path = std::string(tmp ? tmp : ".") + "/smd_dgx_transit.state";
+    REQUIRE(raw.cmd("savestate " + path) == "ok");
+    const std::string trapLoop = "pc=ff0100 sr=2700 a7=fff000 mem=ff0100:4e4160fc instr=40";
+    const std::string clean = "runcase state=" + path + " pc=218 a7=fff000 frames=2";
+
+    // A caught fault raised again and again (trap #1 returns into the loop).
+    CHECK(raw.cmd("catch 200000000").find("mask=200000000") != std::string::npos);
+    const std::string f = raw.cmd("runcase " + trapLoop);
+    CHECK(f.rfind("ok reason=exception vector=33 ", 0) == 0);
+    const std::string r1 = raw.cmd(clean);
+    if (r1.rfind("ok ", 0) != 0) std::printf("    after a fault loop: %s\n", r1.c_str());
+    CHECK(r1.rfind("ok ", 0) == 0);
+    raw.cmd("catch none");
+
+    // A breakpoint hit on every pass of the loop the previous case left.
+    const std::string add = raw.cmd("bpadd x 610");
+    REQUIRE(add.rfind("ok ", 0) == 0);
+    raw.cmd("runcase " + trapLoop);
+    const std::string r2 = raw.cmd(clean);
+    if (r2.rfind("ok ", 0) != 0) std::printf("    after a breakpoint loop: %s\n", r2.c_str());
+    CHECK(r2.rfind("ok ", 0) == 0);
+    // The case's own run still stops on it.
+    const std::string r3 = raw.cmd("runcase state=" + path + " " + trapLoop);
+    CHECK(r3.rfind("ok reason=breakpoint pc=610 ", 0) == 0);
+    std::remove(path.c_str());
+}

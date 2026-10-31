@@ -1004,7 +1004,7 @@ void GpgxBackend::onM68kException(unsigned vector)
     }
     { std::lock_guard<std::mutex> lk(excMx_); lastExc_ = x; }
     if (excCb_) excCb_(x);
-    if (vector < 64 && (excCatch_.load() >> vector) & 1) {
+    if (vector < 64 && (excCatch_.load() >> vector) & 1 && !transit_.load()) {
         const uint32_t before = m68k.pc;
         stopInInstr_ = false;                   // the faulting instruction never retires
         stopMidInstr_ = true;                   // ...but the exception is unfinished
@@ -1090,6 +1090,7 @@ int GpgxBackend::matchBreakpoint(int type, uint32_t addr, int width)
     // Hot path, no lock: nothing can match here.
     if (isExec ? !execMayHit(cpu, addr, width) : rwCount_.load(std::memory_order_relaxed) == 0)
         return -1;
+    if (transit_.load(std::memory_order_relaxed)) return -1;   // see setTransit
 
     // Collect matches under the lock, evaluate conditions outside it: the
     // evaluator calls into the client (IDA), which must not be done while

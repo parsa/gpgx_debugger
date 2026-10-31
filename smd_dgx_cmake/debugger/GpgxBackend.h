@@ -154,6 +154,11 @@ public:
     // (resuming completes it). Read while paused.
     bool stopInsideM68kInstruction() const { return stopMidInstr_; }
     void requestFramePause();
+    // A run whose outcome nobody keeps (runcase's run to the end of the frame
+    // before it loads a state over everything): breakpoints, watchpoints and
+    // caught exceptions do not stop it. Code left in a fault or breakpoint
+    // loop by a previous case would otherwise never reach the boundary.
+    void setTransit(bool on) { transit_.store(on); }
     // Stops fired so far. A stop is fully published (requests cleared, pause
     // callback run, so the host's stop count includes it) once the host's
     // count has caught up with this.
@@ -267,6 +272,7 @@ private:
     bool m68kMidInstruction() const;
     std::atomic<bool> framePauseReq_ {false};
     std::atomic<bool> atFrameBoundary_ {false};
+    std::atomic<bool> transit_ {false};
 
     std::mutex codemapMutex_;
     std::map<uint32_t, uint32_t> codemap_;
