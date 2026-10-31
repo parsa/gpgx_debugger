@@ -87,7 +87,31 @@ IDA's events carry no cause, so the plugin registers IDC functions (callable fro
 
 A halted (double fault) or STOPped 68000 now suspends: `suspend_process()` lands within a frame and `smd_dgx_stop()` says `halted` or `stopped`. Setting PC restarts such a CPU.
 
-Headless IDA processes debugger events only inside a wait. A script that lets a bridge client drive run control (for example `runcase`) must keep calling `wait_for_next_event(WFNE_ANY, 0)` meanwhile, or IDA never sees the stops.
+## Breakpoint hits
+
+A hit on a breakpoint IDA knows (set in IDA, or with the bridge's `bpadd`, which goes through IDA) arrives as a `BREAKPOINT` event, so `wait_for_next_event` returns `BREAKPOINT` (5). For an execute breakpoint the event address is the breakpoint's address. For a watchpoint, `get_debug_event().bpt().hea` is the watchpoint's own address and the event address is the instruction that made the access. IDA applies its own breakpoint settings on top (condition, no-break/trace breakpoints). Every other stop (pause, step, frame, run limits, halted/stopped) stays `PROCESS_SUSPENDED` (13), a caught exception stays `EXCEPTION`, and `smd_dgx_stop()` describes all of them. `get_debug_event().bpt()` asserts on any event that is not a breakpoint: check `eid()` first.
+
+## Bridge clients and IDA's main thread
+
+A bridge client (an external process on the control socket) and an IDA script can drive the same emulator. Bridge run control never waits for IDA (breakpoint edits, `bpadd`/`bpdel`/`bpclear`, do: IDA owns the breakpoint list and assigns the id, so those complete when IDA's main thread is free):
+
+- Every bridge command that runs the machine (`resume`, `frameadv`, `stepframe`, `stepi`/`stepo`, `runto`, `runcase`) runs it at once, and `pause` always stops a running emulator, whatever IDA currently believes.
+- IDA only learns about the run state on its main thread, and a headless IDA only processes debugger events inside `wait_for_next_event`. While a script holds the main thread (a long `execute_python`, a pump loop), IDA's view lags; nothing on the bridge is delayed by it.
+- The plugin keeps IDA's view consistent when it catches up: a stop IDA had not collected before the machine ran on is dropped, so IDA never suspends on a stop that is gone; if IDA was suspended at a stop that a bridge client has run past, the plugin posts a continue for IDA's main thread, and that continue does not run the machine on from where it now is: IDA instead suspends at the current stop.
+
+So a script that lets a bridge client drive only has to give IDA's main thread turns when it wants IDA to be current, for example a pump of short calls:
+
+```python
+# between execute_python calls IDA runs queued work (the plugin's continue);
+# inside one, this lets IDA collect stops
+ida_dbg.wait_for_next_event(ida_dbg.WFNE_ANY | ida_dbg.WFNE_SILENT, 0)
+```
+
+Return values to expect: while IDA is suspended, `wait_for_next_event(WFNE_ANY, 0)` returns `PROCESS_SUSPENDED` (13) immediately, every time, without anything having happened: it reports the state it is in, it is not an event count. Sleep between calls instead of spinning, and look at `get_process_state()` (or the bridge's `status`) for the actual state. Keep each pump call short (a few seconds); the bridge does not care, but IDA's view is only refreshed between calls.
+
+## Batch speed
+
+The emulator runs at the console's 50/60 Hz by default. A bridge client that records or replays cases nobody watches can send `speed max` (frames back to back, no audio) and `speed realtime` to go back; `status` ends with `speed=`. Only the wall clock changes.
 
 ## What was fixed
 
