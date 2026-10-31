@@ -51,7 +51,8 @@ constexpr uint32_t kHaltEntry = 0x0510;
 //   0520  4AFC                 illegal
 //   0530  4E40                 trap #0
 //   0540  3038 0001            move.w ($0001).w,d0 ; address error: odd word read
-//   0600  60FE                 bra.s *            ; every exception vector lands here
+//   0600  4E71                 nop                ; every exception vector lands here
+//   0602  60FE                 bra.s *
 constexpr uint32_t kIllegalEntry = 0x0520;
 constexpr uint32_t kTrapEntry    = 0x0530;
 constexpr uint32_t kAddrErrEntry = 0x0540;
@@ -145,7 +146,8 @@ inline std::vector<uint8_t> buildRom()
 
     // Vectors 2..63 (faults, traps, interrupts) all park in one handler.
     for (uint32_t v = 2; v < 64; ++v) put32be(rom, v * 4, kExcHandler);
-    put16be(rom, kExcHandler, 0x60FE);         // bra.s *
+    put16be(rom, kExcHandler, 0x4E71);         // nop
+    put16be(rom, kExcHandler + 2, 0x60FE);     // bra.s *
     put16be(rom, kIllegalEntry, 0x4AFC);       // illegal
     put16be(rom, kTrapEntry, 0x4E40);          // trap #0
     put16be(rom, kAddrErrEntry + 0, 0x3038);   // move.w ($0001).w,d0

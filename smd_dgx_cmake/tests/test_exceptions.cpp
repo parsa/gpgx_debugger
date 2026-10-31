@@ -61,7 +61,8 @@ TEST(trap_is_reported_and_can_stop_before_its_vector)
     e.gpgx()->setExceptionCatch(0);
     e.backend()->resume();
     REQUIRE(e.pauseAndWait());
-    CHECK_EQ(e.backend()->getM68kRegs().pc, kExcHandler);
+    const uint32_t pc = e.backend()->getM68kRegs().pc;          // in the handler: nop; bra.s *
+    CHECK(pc == kExcHandler || pc == kExcHandler + 2);
 }
 
 // A debugger stopped on a fault that moves PC has taken over: the vector must

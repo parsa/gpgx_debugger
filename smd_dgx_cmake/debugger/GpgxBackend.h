@@ -198,7 +198,7 @@ private:
     // instruction the CPU is standing on, and must execute rather than stop.
     bool standingOnNext_ = false;
     // Stopped on a caught exception (emulation thread state, read by armRun
-    // while paused): the PC at that moment, to tell whether it was moved.
+    // while paused), and the PC at that moment (to tell whether it was moved).
     bool     inExceptionStop_ = false;
     uint32_t excStopPc_ = 0;
 

@@ -131,6 +131,31 @@ TEST(instruction_budget_after_moving_pc_on_an_exception_stop)
 
 // A pause delivered between frames must not let the frame that just ended
 // count against a frame budget armed during it.
+// And when the stop on a caught exception is simply continued: resuming
+// finishes the exception, so the first instruction retired is the handler's.
+TEST(instruction_budget_after_continuing_an_exception_stop)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+
+    e.gpgx()->setExceptionCatch(uint64_t(1) << 4);
+    M68kRegs r = e.backend()->getM68kRegs();
+    r.pc = kIllegalEntry; r.sr = 0x2700; r.a[7] = kInitSp;
+    e.backend()->setM68kRegs(r);
+    const uint64_t s = e.pauseSeq();
+    e.backend()->resume();
+    REQUIRE(e.waitPause(s));
+    REQUIRE(e.pauseReason() == StopReason::Exception);
+    e.gpgx()->setExceptionCatch(0);
+
+    RunLimits budget;
+    budget.maxInstructions = 1;                          // the handler's nop
+    REQUIRE(runAndWait(e, budget));
+    CHECK(e.pauseReason() == StopReason::Budget);
+    CHECK_EQ(e.backend()->getM68kRegs().pc, kExcHandler + 2);
+}
+
 TEST(frame_budget_after_a_between_frame_stop_runs_a_whole_frame)
 {
     t::Emu e;

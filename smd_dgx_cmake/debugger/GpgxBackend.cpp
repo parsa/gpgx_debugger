@@ -660,9 +660,11 @@ void GpgxBackend::armRun(const RunLimits& lim)
     // instruction the CPU stands on. Stopped between frames (standingOnNext_),
     // its hook has yet to run and will count it: start one later, so the
     // budget is always instructions retired from here.
-    // Likewise while stopped on a caught exception whose PC has been moved:
-    // standingOnNext_ is only set once that stop ends.
-    const bool standing = standingOnNext_ || (inExceptionStop_ && m68k.pc != excStopPc_);
+    // Likewise while stopped on a caught exception: the faulting instruction
+    // was counted but never retires. Continuing finishes the exception and the
+    // handler's first instruction is counted by its own hook; moving PC makes
+    // the next hook the standing one (standingOnNext_, set when the stop ends).
+    const bool standing = standingOnNext_ || inExceptionStop_;
     runStartExec_ = execCount_ + (standing ? 1 : 0);
     runFrames_ = 0;
     runActive_.store(lim.any());
