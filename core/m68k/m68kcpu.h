@@ -785,6 +785,8 @@ INLINE void m68ki_jump_vector(uint vector);
 INLINE void m68ki_branch_8(uint offset);
 INLINE void m68ki_branch_16(uint offset);
 INLINE void m68ki_branch_32(uint offset);
+INLINE void m68ki_check_odd_target(uint target, uint stacked_pc);
+INLINE void m68ki_jump_checked(uint new_pc);
 
 /* Status register operations. */
 INLINE void m68ki_set_s_flag(uint value);            /* Only bit 2 of value should be set (i.e. 4 or 0) */
@@ -1159,6 +1161,36 @@ INLINE void m68ki_jump(uint new_pc)
   REG_PC = new_pc;
 }
 
+/* A 68000 cannot fetch an instruction from an odd address: a jump, branch or
+ * return to one takes an address error from within that instruction, before
+ * anything is fetched there. stacked_pc is the PC a real MC68000 stacks for
+ * that instruction (as measured on hardware for WinUAE's 68000 core); the
+ * access address is the target, the access an instruction read in program
+ * space. The per-fetch check (M68K_CHECK_PC_ADDRESS_ERROR) stays off: every
+ * way an instruction can reach an odd PC is checked here instead.
+ */
+INLINE void m68ki_check_odd_target(uint target, uint stacked_pc)
+{
+#if M68K_EMULATE_ADDRESS_ERROR
+  if ((target & 1) && m68ki_cpu.aerr_enabled)
+  {
+    REG_PC = stacked_pc;
+    CPU_INSTR_MODE = INSTRUCTION_YES;   /* raised by an instruction */
+    m68ki_cpu.aerr_address = target;
+    m68ki_cpu.aerr_write_mode = MODE_READ;
+    m68ki_cpu.aerr_fc = FLAG_S | FUNCTION_CODE_USER_PROGRAM;
+    longjmp(m68ki_cpu.aerr_trap, 1);
+  }
+#endif
+}
+
+/* jmp, rts, rtr: the 68000 stacks the instruction's address + 2 */
+INLINE void m68ki_jump_checked(uint new_pc)
+{
+  m68ki_check_odd_target(new_pc, REG_PPC + 2);
+  REG_PC = new_pc;
+}
+
 INLINE void m68ki_jump_vector(uint vector)
 {
 #if defined(HOOK_CPU) && defined(M68K_MAIN_CPU_HOOKS)
@@ -1174,6 +1206,19 @@ INLINE void m68ki_jump_vector(uint vector)
 #endif
   m68ki_use_data_space() /* auto-disable (see m68kcpu.h) */
   REG_PC = m68ki_read_32(vector<<2);
+#if M68K_EMULATE_ADDRESS_ERROR
+  /* An odd handler address: the 68000 takes an address error fetching it,
+     stacking the vector's own address as PC (a bus or address error vector
+     that is odd halts: see m68ki_exception_address_error). */
+  if ((REG_PC & 1) && m68ki_cpu.aerr_enabled)
+  {
+    m68ki_cpu.aerr_address = REG_PC;
+    m68ki_cpu.aerr_write_mode = MODE_READ;
+    m68ki_cpu.aerr_fc = FLAG_S | FUNCTION_CODE_USER_PROGRAM;
+    REG_PC = vector << 2;
+    m68ki_exception_address_error();
+  }
+#endif
 }
 
 
@@ -1182,18 +1227,30 @@ INLINE void m68ki_jump_vector(uint vector)
  * So far I've found no problems with not calling pc_changed for 8 or 16
  * bit branches.
  */
+/* Bcc/BRA to an odd address stack the branch's address + 2; BSR (which has
+ * pushed its return address by then) stacks the target. DBcc checks its own
+ * target before counting (see the DBcc handlers). */
+INLINE void m68ki_check_odd_branch(uint target)
+{
+  if (target & 1)
+    m68ki_check_odd_target(target, ((REG_IR & 0xff00) == 0x6100) ? target : REG_PPC + 2);
+}
+
 INLINE void m68ki_branch_8(uint offset)
 {
+  m68ki_check_odd_branch(REG_PC + MAKE_INT_8(offset));
   REG_PC += MAKE_INT_8(offset);
 }
 
 INLINE void m68ki_branch_16(uint offset)
 {
+  m68ki_check_odd_branch(REG_PC + MAKE_INT_16(offset));
   REG_PC += MAKE_INT_16(offset);
 }
 
 INLINE void m68ki_branch_32(uint offset)
 {
+  m68ki_check_odd_branch(REG_PC + offset);
   REG_PC += offset;
 }
 

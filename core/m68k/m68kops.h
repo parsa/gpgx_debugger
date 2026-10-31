@@ -7334,13 +7334,17 @@ static void m68k_op_dbt_16(void)
 static void m68k_op_dbf_16(void)
 {
   uint* r_dst = &DY;
-  uint res = MASK_OUT_ABOVE_16(*r_dst - 1);
-  *r_dst = MASK_OUT_BELOW_16(*r_dst) | res;
+  uint offset = OPER_I_16();
+  uint res;
 
+  /* the 68000 fetches the branch target before it counts (and even
+     when the count then expires): an odd target faults first */
+  REG_PC -= 2;
+  m68ki_check_odd_target(REG_PC + MAKE_INT_16(offset), REG_PC + MAKE_INT_16(offset) + 2);
+  res = MASK_OUT_ABOVE_16(*r_dst - 1);
+  *r_dst = MASK_OUT_BELOW_16(*r_dst) | res;
   if(res != 0xffff)
   {
-    uint offset = OPER_I_16();
-    REG_PC -= 2;
     m68ki_branch_16(offset);
     USE_CYCLES(CYC_DBCC_F_NOEXP);
 
@@ -7358,13 +7362,17 @@ static void m68k_op_dbhi_16(void)
   if(COND_NOT_HI())
   {
     uint* r_dst = &DY;
-    uint res = MASK_OUT_ABOVE_16(*r_dst - 1);
+    uint offset = OPER_I_16();
+    uint res;
 
+    /* the 68000 fetches the branch target before it counts (and even
+       when the count then expires): an odd target faults first */
+    REG_PC -= 2;
+    m68ki_check_odd_target(REG_PC + MAKE_INT_16(offset), REG_PC + MAKE_INT_16(offset) + 2);
+    res = MASK_OUT_ABOVE_16(*r_dst - 1);
     *r_dst = MASK_OUT_BELOW_16(*r_dst) | res;
     if(res != 0xffff)
     {
-      uint offset = OPER_I_16();
-      REG_PC -= 2;
       m68ki_branch_16(offset);
       USE_CYCLES(CYC_DBCC_F_NOEXP);
 
@@ -7385,13 +7393,17 @@ static void m68k_op_dbls_16(void)
   if(COND_NOT_LS())
   {
     uint* r_dst = &DY;
-    uint res = MASK_OUT_ABOVE_16(*r_dst - 1);
+    uint offset = OPER_I_16();
+    uint res;
 
+    /* the 68000 fetches the branch target before it counts (and even
+       when the count then expires): an odd target faults first */
+    REG_PC -= 2;
+    m68ki_check_odd_target(REG_PC + MAKE_INT_16(offset), REG_PC + MAKE_INT_16(offset) + 2);
+    res = MASK_OUT_ABOVE_16(*r_dst - 1);
     *r_dst = MASK_OUT_BELOW_16(*r_dst) | res;
     if(res != 0xffff)
     {
-      uint offset = OPER_I_16();
-      REG_PC -= 2;
       m68ki_branch_16(offset);
       USE_CYCLES(CYC_DBCC_F_NOEXP);
 
@@ -7412,13 +7424,17 @@ static void m68k_op_dbcc_16(void)
   if(COND_NOT_CC())
   {
     uint* r_dst = &DY;
-    uint res = MASK_OUT_ABOVE_16(*r_dst - 1);
+    uint offset = OPER_I_16();
+    uint res;
 
+    /* the 68000 fetches the branch target before it counts (and even
+       when the count then expires): an odd target faults first */
+    REG_PC -= 2;
+    m68ki_check_odd_target(REG_PC + MAKE_INT_16(offset), REG_PC + MAKE_INT_16(offset) + 2);
+    res = MASK_OUT_ABOVE_16(*r_dst - 1);
     *r_dst = MASK_OUT_BELOW_16(*r_dst) | res;
     if(res != 0xffff)
     {
-      uint offset = OPER_I_16();
-      REG_PC -= 2;
       m68ki_branch_16(offset);
       USE_CYCLES(CYC_DBCC_F_NOEXP);
 
@@ -7439,13 +7455,17 @@ static void m68k_op_dbcs_16(void)
   if(COND_NOT_CS())
   {
     uint* r_dst = &DY;
-    uint res = MASK_OUT_ABOVE_16(*r_dst - 1);
+    uint offset = OPER_I_16();
+    uint res;
 
+    /* the 68000 fetches the branch target before it counts (and even
+       when the count then expires): an odd target faults first */
+    REG_PC -= 2;
+    m68ki_check_odd_target(REG_PC + MAKE_INT_16(offset), REG_PC + MAKE_INT_16(offset) + 2);
+    res = MASK_OUT_ABOVE_16(*r_dst - 1);
     *r_dst = MASK_OUT_BELOW_16(*r_dst) | res;
     if(res != 0xffff)
     {
-      uint offset = OPER_I_16();
-      REG_PC -= 2;
       m68ki_branch_16(offset);
       USE_CYCLES(CYC_DBCC_F_NOEXP);
 
@@ -7466,13 +7486,17 @@ static void m68k_op_dbne_16(void)
   if(COND_NOT_NE())
   {
     uint* r_dst = &DY;
-    uint res = MASK_OUT_ABOVE_16(*r_dst - 1);
+    uint offset = OPER_I_16();
+    uint res;
 
+    /* the 68000 fetches the branch target before it counts (and even
+       when the count then expires): an odd target faults first */
+    REG_PC -= 2;
+    m68ki_check_odd_target(REG_PC + MAKE_INT_16(offset), REG_PC + MAKE_INT_16(offset) + 2);
+    res = MASK_OUT_ABOVE_16(*r_dst - 1);
     *r_dst = MASK_OUT_BELOW_16(*r_dst) | res;
     if(res != 0xffff)
     {
-      uint offset = OPER_I_16();
-      REG_PC -= 2;
       m68ki_branch_16(offset);
       USE_CYCLES(CYC_DBCC_F_NOEXP);
 
@@ -7493,13 +7517,17 @@ static void m68k_op_dbeq_16(void)
   if(COND_NOT_EQ())
   {
     uint* r_dst = &DY;
-    uint res = MASK_OUT_ABOVE_16(*r_dst - 1);
+    uint offset = OPER_I_16();
+    uint res;
 
+    /* the 68000 fetches the branch target before it counts (and even
+       when the count then expires): an odd target faults first */
+    REG_PC -= 2;
+    m68ki_check_odd_target(REG_PC + MAKE_INT_16(offset), REG_PC + MAKE_INT_16(offset) + 2);
+    res = MASK_OUT_ABOVE_16(*r_dst - 1);
     *r_dst = MASK_OUT_BELOW_16(*r_dst) | res;
     if(res != 0xffff)
     {
-      uint offset = OPER_I_16();
-      REG_PC -= 2;
       m68ki_branch_16(offset);
       USE_CYCLES(CYC_DBCC_F_NOEXP);
 
@@ -7520,13 +7548,17 @@ static void m68k_op_dbvc_16(void)
   if(COND_NOT_VC())
   {
     uint* r_dst = &DY;
-    uint res = MASK_OUT_ABOVE_16(*r_dst - 1);
+    uint offset = OPER_I_16();
+    uint res;
 
+    /* the 68000 fetches the branch target before it counts (and even
+       when the count then expires): an odd target faults first */
+    REG_PC -= 2;
+    m68ki_check_odd_target(REG_PC + MAKE_INT_16(offset), REG_PC + MAKE_INT_16(offset) + 2);
+    res = MASK_OUT_ABOVE_16(*r_dst - 1);
     *r_dst = MASK_OUT_BELOW_16(*r_dst) | res;
     if(res != 0xffff)
     {
-      uint offset = OPER_I_16();
-      REG_PC -= 2;
       m68ki_branch_16(offset);
       USE_CYCLES(CYC_DBCC_F_NOEXP);
 
@@ -7547,13 +7579,17 @@ static void m68k_op_dbvs_16(void)
   if(COND_NOT_VS())
   {
     uint* r_dst = &DY;
-    uint res = MASK_OUT_ABOVE_16(*r_dst - 1);
+    uint offset = OPER_I_16();
+    uint res;
 
+    /* the 68000 fetches the branch target before it counts (and even
+       when the count then expires): an odd target faults first */
+    REG_PC -= 2;
+    m68ki_check_odd_target(REG_PC + MAKE_INT_16(offset), REG_PC + MAKE_INT_16(offset) + 2);
+    res = MASK_OUT_ABOVE_16(*r_dst - 1);
     *r_dst = MASK_OUT_BELOW_16(*r_dst) | res;
     if(res != 0xffff)
     {
-      uint offset = OPER_I_16();
-      REG_PC -= 2;
       m68ki_branch_16(offset);
       USE_CYCLES(CYC_DBCC_F_NOEXP);
 
@@ -7574,13 +7610,17 @@ static void m68k_op_dbpl_16(void)
   if(COND_NOT_PL())
   {
     uint* r_dst = &DY;
-    uint res = MASK_OUT_ABOVE_16(*r_dst - 1);
+    uint offset = OPER_I_16();
+    uint res;
 
+    /* the 68000 fetches the branch target before it counts (and even
+       when the count then expires): an odd target faults first */
+    REG_PC -= 2;
+    m68ki_check_odd_target(REG_PC + MAKE_INT_16(offset), REG_PC + MAKE_INT_16(offset) + 2);
+    res = MASK_OUT_ABOVE_16(*r_dst - 1);
     *r_dst = MASK_OUT_BELOW_16(*r_dst) | res;
     if(res != 0xffff)
     {
-      uint offset = OPER_I_16();
-      REG_PC -= 2;
       m68ki_branch_16(offset);
       USE_CYCLES(CYC_DBCC_F_NOEXP);
 
@@ -7601,13 +7641,17 @@ static void m68k_op_dbmi_16(void)
   if(COND_NOT_MI())
   {
     uint* r_dst = &DY;
-    uint res = MASK_OUT_ABOVE_16(*r_dst - 1);
+    uint offset = OPER_I_16();
+    uint res;
 
+    /* the 68000 fetches the branch target before it counts (and even
+       when the count then expires): an odd target faults first */
+    REG_PC -= 2;
+    m68ki_check_odd_target(REG_PC + MAKE_INT_16(offset), REG_PC + MAKE_INT_16(offset) + 2);
+    res = MASK_OUT_ABOVE_16(*r_dst - 1);
     *r_dst = MASK_OUT_BELOW_16(*r_dst) | res;
     if(res != 0xffff)
     {
-      uint offset = OPER_I_16();
-      REG_PC -= 2;
       m68ki_branch_16(offset);
       USE_CYCLES(CYC_DBCC_F_NOEXP);
 
@@ -7628,13 +7672,17 @@ static void m68k_op_dbge_16(void)
   if(COND_NOT_GE())
   {
     uint* r_dst = &DY;
-    uint res = MASK_OUT_ABOVE_16(*r_dst - 1);
+    uint offset = OPER_I_16();
+    uint res;
 
+    /* the 68000 fetches the branch target before it counts (and even
+       when the count then expires): an odd target faults first */
+    REG_PC -= 2;
+    m68ki_check_odd_target(REG_PC + MAKE_INT_16(offset), REG_PC + MAKE_INT_16(offset) + 2);
+    res = MASK_OUT_ABOVE_16(*r_dst - 1);
     *r_dst = MASK_OUT_BELOW_16(*r_dst) | res;
     if(res != 0xffff)
     {
-      uint offset = OPER_I_16();
-      REG_PC -= 2;
       m68ki_branch_16(offset);
       USE_CYCLES(CYC_DBCC_F_NOEXP);
 
@@ -7655,13 +7703,17 @@ static void m68k_op_dblt_16(void)
   if(COND_NOT_LT())
   {
     uint* r_dst = &DY;
-    uint res = MASK_OUT_ABOVE_16(*r_dst - 1);
+    uint offset = OPER_I_16();
+    uint res;
 
+    /* the 68000 fetches the branch target before it counts (and even
+       when the count then expires): an odd target faults first */
+    REG_PC -= 2;
+    m68ki_check_odd_target(REG_PC + MAKE_INT_16(offset), REG_PC + MAKE_INT_16(offset) + 2);
+    res = MASK_OUT_ABOVE_16(*r_dst - 1);
     *r_dst = MASK_OUT_BELOW_16(*r_dst) | res;
     if(res != 0xffff)
     {
-      uint offset = OPER_I_16();
-      REG_PC -= 2;
       m68ki_branch_16(offset);
       USE_CYCLES(CYC_DBCC_F_NOEXP);
 
@@ -7682,13 +7734,17 @@ static void m68k_op_dbgt_16(void)
   if(COND_NOT_GT())
   {
     uint* r_dst = &DY;
-    uint res = MASK_OUT_ABOVE_16(*r_dst - 1);
+    uint offset = OPER_I_16();
+    uint res;
 
+    /* the 68000 fetches the branch target before it counts (and even
+       when the count then expires): an odd target faults first */
+    REG_PC -= 2;
+    m68ki_check_odd_target(REG_PC + MAKE_INT_16(offset), REG_PC + MAKE_INT_16(offset) + 2);
+    res = MASK_OUT_ABOVE_16(*r_dst - 1);
     *r_dst = MASK_OUT_BELOW_16(*r_dst) | res;
     if(res != 0xffff)
     {
-      uint offset = OPER_I_16();
-      REG_PC -= 2;
       m68ki_branch_16(offset);
       USE_CYCLES(CYC_DBCC_F_NOEXP);
 
@@ -7709,13 +7765,17 @@ static void m68k_op_dble_16(void)
   if(COND_NOT_LE())
   {
     uint* r_dst = &DY;
-    uint res = MASK_OUT_ABOVE_16(*r_dst - 1);
+    uint offset = OPER_I_16();
+    uint res;
 
+    /* the 68000 fetches the branch target before it counts (and even
+       when the count then expires): an odd target faults first */
+    REG_PC -= 2;
+    m68ki_check_odd_target(REG_PC + MAKE_INT_16(offset), REG_PC + MAKE_INT_16(offset) + 2);
+    res = MASK_OUT_ABOVE_16(*r_dst - 1);
     *r_dst = MASK_OUT_BELOW_16(*r_dst) | res;
     if(res != 0xffff)
     {
-      uint offset = OPER_I_16();
-      REG_PC -= 2;
       m68ki_branch_16(offset);
       USE_CYCLES(CYC_DBCC_F_NOEXP);
 
@@ -9360,49 +9420,50 @@ static void m68k_op_illegal(void)
 
 static void m68k_op_jmp_32_ai(void)
 {
-  m68ki_jump(EA_AY_AI_32());
+  m68ki_jump_checked(EA_AY_AI_32());
 }
 
 
 static void m68k_op_jmp_32_di(void)
 {
-  m68ki_jump(EA_AY_DI_32());
+  m68ki_jump_checked(EA_AY_DI_32());
 }
 
 
 static void m68k_op_jmp_32_ix(void)
 {
-  m68ki_jump(EA_AY_IX_32());
+  m68ki_jump_checked(EA_AY_IX_32());
 }
 
 
 static void m68k_op_jmp_32_aw(void)
 {
-  m68ki_jump(EA_AW_32());
+  m68ki_jump_checked(EA_AW_32());
 }
 
 
 static void m68k_op_jmp_32_al(void)
 {
-  m68ki_jump(EA_AL_32());
+  m68ki_jump_checked(EA_AL_32());
 }
 
 
 static void m68k_op_jmp_32_pcdi(void)
 {
-  m68ki_jump(EA_PCDI_32());
+  m68ki_jump_checked(EA_PCDI_32());
 }
 
 
 static void m68k_op_jmp_32_pcix(void)
 {
-  m68ki_jump(EA_PCIX_32());
+  m68ki_jump_checked(EA_PCIX_32());
 }
 
 
 static void m68k_op_jsr_32_ai(void)
 {
   uint ea = EA_AY_AI_32();
+  m68ki_check_odd_target(ea, REG_PPC + 2); /* before the push */
   m68ki_push_32(REG_PC);
   m68ki_jump(ea);
 }
@@ -9411,6 +9472,7 @@ static void m68k_op_jsr_32_ai(void)
 static void m68k_op_jsr_32_di(void)
 {
   uint ea = EA_AY_DI_32();
+  m68ki_check_odd_target(ea, REG_PPC + 2); /* before the push */
   m68ki_push_32(REG_PC);
   m68ki_jump(ea);
 }
@@ -9419,6 +9481,7 @@ static void m68k_op_jsr_32_di(void)
 static void m68k_op_jsr_32_ix(void)
 {
   uint ea = EA_AY_IX_32();
+  m68ki_check_odd_target(ea, REG_PPC + 2); /* before the push */
   m68ki_push_32(REG_PC);
   m68ki_jump(ea);
 }
@@ -9427,6 +9490,7 @@ static void m68k_op_jsr_32_ix(void)
 static void m68k_op_jsr_32_aw(void)
 {
   uint ea = EA_AW_32();
+  m68ki_check_odd_target(ea, REG_PPC + 4); /* before the push */
   m68ki_push_32(REG_PC);
   m68ki_jump(ea);
 }
@@ -9435,6 +9499,7 @@ static void m68k_op_jsr_32_aw(void)
 static void m68k_op_jsr_32_al(void)
 {
   uint ea = EA_AL_32();
+  m68ki_check_odd_target(ea, REG_PPC + 6); /* before the push */
   m68ki_push_32(REG_PC);
   m68ki_jump(ea);
 }
@@ -9443,6 +9508,7 @@ static void m68k_op_jsr_32_al(void)
 static void m68k_op_jsr_32_pcdi(void)
 {
   uint ea = EA_PCDI_32();
+  m68ki_check_odd_target(ea, REG_PPC + 2); /* before the push */
   m68ki_push_32(REG_PC);
   m68ki_jump(ea);
 }
@@ -9451,6 +9517,7 @@ static void m68k_op_jsr_32_pcdi(void)
 static void m68k_op_jsr_32_pcix(void)
 {
   uint ea = EA_PCIX_32();
+  m68ki_check_odd_target(ea, REG_PPC + 2); /* before the push */
   m68ki_push_32(REG_PC);
   m68ki_jump(ea);
 }
@@ -19918,6 +19985,20 @@ static void m68k_op_rte_32(void)
     new_sr = m68ki_pull_16();
     new_pc = m68ki_pull_32();
     m68ki_jump(new_pc);
+#if M68K_EMULATE_ADDRESS_ERROR
+    if (new_pc & 1)
+    {
+      /* SR is restored before the target's fetch faults, with no interrupt
+         in between: set it without m68ki_set_sr's interrupt check */
+      FLAG_T1 = BIT_F(new_sr);
+      FLAG_INT_MASK = new_sr & 0x0700;
+      m68ki_set_ccr(new_sr);
+      m68ki_set_s_flag((new_sr >> 11) & 4);
+      CPU_INSTR_MODE = INSTRUCTION_YES;
+      CPU_RUN_MODE = RUN_MODE_NORMAL;
+      m68ki_check_odd_target(new_pc, REG_PPC + 2);
+    }
+#endif
     m68ki_set_sr(new_sr);
 
 #if M68K_EMULATE_ADDRESS_ERROR
@@ -19934,13 +20015,13 @@ static void m68k_op_rte_32(void)
 static void m68k_op_rtr_32(void)
 {
   m68ki_set_ccr(m68ki_pull_16());
-  m68ki_jump(m68ki_pull_32());
+  m68ki_jump_checked(m68ki_pull_32());
 }
 
 
 static void m68k_op_rts_32(void)
 {
-  m68ki_jump(m68ki_pull_32());
+  m68ki_jump_checked(m68ki_pull_32());
 }
 
 

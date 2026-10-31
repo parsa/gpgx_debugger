@@ -14,6 +14,7 @@ add_executable(smd_dgx_tests
   test_subscriptions.cpp
   test_cpu_state.cpp
   test_exceptions.cpp
+  test_odd_pc.cpp
   test_stop_reasons.cpp
   test_access_log.cpp
   test_run_limits.cpp
