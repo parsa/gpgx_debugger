@@ -1629,8 +1629,8 @@ TEST(a_resume_inside_stop_publication_never_hides_the_stop)
     REQUIRE(raw.cmd("resume").rfind("ok", 0) == 0);
     std::thread resumer;
     std::atomic<bool> once{false};
-    w.emu.gpgx()->setStopSectionHookForTest([&] {
-        if (once.exchange(true)) return;
+    w.emu.gpgx()->setStopSectionHookForTest([&](int phase) {
+        if (phase != 0 || once.exchange(true)) return;
         // A bridge client's resume, from its own thread, right now.
         resumer = std::thread([&] { ida.host->hostMutations().resume(); });
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -1724,4 +1724,39 @@ TEST(stepping_a_running_machine_ends_paused_at_the_step)
         CHECK(st.find(" paused=1") != std::string::npos);
     }
     w.emu.host()->setHostMutations({});
+}
+
+// A command that settles before arming must settle on a stop that is fully
+// published: a stop that is marked paused but not yet announced still clears
+// the pending requests, and would clear the step just armed.
+TEST(a_step_armed_while_a_stop_is_being_published_is_not_lost)
+{
+    Wired w(54);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(54)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    REQUIRE(raw.cmd("resume").rfind("ok", 0) == 0);
+    Raw stepper;
+    REQUIRE(stepper.connect(portFor(54)));
+    std::thread client;
+    std::string stepReply;
+    std::atomic<bool> once{false};
+    w.emu.gpgx()->setStopSectionHookForTest([&](int phase) {
+        if (phase != 1 || once.exchange(true)) return;
+        // Paused, not yet announced: a client steps right now.
+        client = std::thread([&] { stepReply = stepper.cmd("stepi"); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    });
+    w.emu.backend()->pause();
+    for (int i = 0; i < 400 && !once.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    REQUIRE(once.load());
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    if (client.joinable()) client.join();
+    w.emu.gpgx()->setStopSectionHookForTest(nullptr);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    CHECK(stepReply == "ok");
+    CHECK(w.emu.backend()->isPaused());                   // the step ran and stopped
+    CHECK(w.emu.gpgx()->lastStopReason() == StopReason::Step);
+    raw.cmd("pause");
 }

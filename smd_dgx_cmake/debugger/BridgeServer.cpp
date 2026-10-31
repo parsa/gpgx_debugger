@@ -409,9 +409,14 @@ bool BridgeServer::runMachine()
 std::string BridgeServer::settlePaused(Client& client)
 {
     IDebugBackend* be = host_->backend();
+    // Paused at a stop that is fully published (its requests cleared, its
+    // event out: the host's count includes every stop fired) and seen here.
+    // Merely "paused" is not enough: a stop being published still clears
+    // pending requests, including one armed right after settling.
     auto settled = [&] {
         std::lock_guard<std::mutex> lk(clientsMx_);
-        return be->isPaused() && lastStopSeq_ == host_->stopCount();
+        const uint64_t n = host_->stopCount();
+        return be->isPaused() && n == host_->gpgx()->stopsFired() && lastStopSeq_ == n;
     };
     if (!be->isPaused()) {
         const std::string p = handle("pause", client);

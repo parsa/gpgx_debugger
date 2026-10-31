@@ -593,7 +593,13 @@ void GpgxBackend::cancelRunRequests()
     framePauseReq_.store(false);
 }
 
-void GpgxBackend::armStepInto(Cpu cpu)
+// Arming takes the stop lock, so a stop being published (which clears every
+// pending request) cannot clear a request armed for the run that follows it.
+void GpgxBackend::armStepInto(Cpu cpu) { std::lock_guard<std::mutex> lk(reqMx_); armStepIntoLocked(cpu); }
+void GpgxBackend::armStepOver(Cpu cpu) { std::lock_guard<std::mutex> lk(reqMx_); armStepOverLocked(cpu); }
+void GpgxBackend::requestFramePause()  { std::lock_guard<std::mutex> lk(reqMx_); framePauseReq_.store(true); }
+
+void GpgxBackend::armStepIntoLocked(Cpu cpu)
 {
     if (cpu == Cpu::Z80) stepIntoZ80_.store(true);
     else                 stepInto_.store(true);
@@ -614,7 +620,7 @@ bool GpgxBackend::stepIfEpoch(Cpu cpu, bool over, uint64_t epoch)
     {
         std::lock_guard<std::mutex> lk(reqMx_);
         if (runEpoch_.load() != epoch) return false;
-        if (over) armStepOver(cpu); else armStepInto(cpu);
+        if (over) armStepOverLocked(cpu); else armStepIntoLocked(cpu);
         paused_.store(false);
     }
     if (resumeCb_) resumeCb_();
@@ -624,7 +630,7 @@ bool GpgxBackend::stepIfEpoch(Cpu cpu, bool over, uint64_t epoch)
 void GpgxBackend::stepInto(Cpu cpu)
 {
     std::lock_guard<std::mutex> lk(reqMx_);
-    armStepInto(cpu);
+    armStepIntoLocked(cpu);
     beginRun();
     paused_.store(false);
 }
@@ -635,7 +641,7 @@ void GpgxBackend::stepOver(Cpu cpu)
     resume();
 }
 
-void GpgxBackend::armStepOver(Cpu cpu)
+void GpgxBackend::armStepOverLocked(Cpu cpu)
 {
     if (cpu == Cpu::Z80) { armStepOverZ80(); return; }
 
@@ -1041,9 +1047,11 @@ void GpgxBackend::firePause(uint32_t pc, Cpu cpu, int bpId, StopReason why)
         // armed, one would stop some later, unrelated run.
         std::lock_guard<std::mutex> lk(reqMx_);
         stopEpoch_.store(runEpoch_.load());
-        if (stopSectionHook_) stopSectionHook_();
+        if (stopSectionHook_) stopSectionHook_(0);
         paused_.store(true);
+        if (stopSectionHook_) stopSectionHook_(1);
         cancelRunRequests();
+        stopsFired_.fetch_add(1);
     }
     if (pauseCb_) pauseCb_(pc, cpu);
     // Block the emulation thread until resumed. While blocked, pump host
@@ -1202,7 +1210,7 @@ void GpgxBackend::armStepOverZ80()
         break;
     default: break;
     }
-    if (len == 0) { armStepInto(Cpu::Z80); return; }      // nothing to step over
+    if (len == 0) { armStepIntoLocked(Cpu::Z80); return; }  // nothing to step over
 
     stepOverAddrZ80_.store(int(uint16_t(pc + len)));
 }
