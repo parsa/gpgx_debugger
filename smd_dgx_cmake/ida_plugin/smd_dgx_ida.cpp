@@ -234,6 +234,8 @@ void cancel_codemap_requests()
 // ---------------------------------------------------------------------------
 // EmuHost event -> IDA debug_event_t
 // ---------------------------------------------------------------------------
+ea_t ida_bpt_ea(int backendId, bool* hardware);
+
 void on_emu_event(const DebugEvent& ev)
 {
     debug_event_t ida_ev;               // VERIFY-9.3: field/ctor surface
@@ -278,14 +280,28 @@ void on_emu_event(const DebugEvent& ev)
                     ev.reason == StopReason::Halted ? "halted (double fault)" : "stopped (STOP/wait)",
                     unsigned(ev.pc & 0xFFFFFF), why.c_str());
         }
-        if (ev.reason == StopReason::Exception) {
-            excinfo_t& exc = ida_ev.set_exception();
-            exc.code = ev.exc.vector;
-            exc.can_cont = true;
-            exc.ea = ev.exc.access != ExcAccess::None ? ea_t(ev.exc.address) : BADADDR;
-            exc.info = describeException(ev.exc).c_str();
-        } else {
-            ida_ev.set_eid(PROCESS_SUSPENDED);
+        // A hit on one of IDA's breakpoints is IDA's BREAKPOINT event: IDA
+        // then knows which breakpoint it was (and applies its own settings to
+        // it: no-break/trace breakpoints, hit counts). Execute breakpoints are
+        // found by the event address; a watchpoint by hea, its own address,
+        // while the event address is the instruction that made the access.
+        {
+            bool hardware = false;
+            const ea_t bptEa = (ev.reason == StopReason::Breakpoint || ev.reason == StopReason::Watchpoint)
+                             ? ida_bpt_ea(ev.bpId, &hardware) : BADADDR;
+            if (ev.reason == StopReason::Exception) {
+                excinfo_t& exc = ida_ev.set_exception();
+                exc.code = ev.exc.vector;
+                exc.can_cont = true;
+                exc.ea = ev.exc.access != ExcAccess::None ? ea_t(ev.exc.address) : BADADDR;
+                exc.info = describeException(ev.exc).c_str();
+            } else if (bptEa != BADADDR) {
+                bptaddr_t& b = ida_ev.set_bpt();
+                b.hea = hardware ? bptEa : BADADDR;
+                b.kea = BADADDR;
+            } else {
+                ida_ev.set_eid(PROCESS_SUSPENDED);
+            }
         }
         ida_ev.ea = ev.pc;
         g_sync.pushStop(ida_ev);
@@ -567,6 +583,22 @@ BpRec* find_rec_id(int id)
     for (auto& r : g_bps)
         for (const auto& part : r.parts) if (part.id == id) return &r;
     return nullptr;
+}
+
+// The IDA breakpoint address behind a backend breakpoint, or BADADDR when IDA
+// has none (it never came through IDA). Emulation thread; no IDA calls.
+ea_t ida_bpt_ea(int backendId, bool* hardware)
+{
+    if (backendId < 0) return BADADDR;
+    std::lock_guard<std::mutex> lock(g_bpMx);
+    const BpRec* r = find_rec_id(backendId);
+    if (!r) return BADADDR;
+    for (const auto& part : r->parts) {
+        if (part.id != backendId) continue;
+        *hardware = part.key.type != uint8_t(BpType::PC);
+        return ea_t(part.key.start) + (part.key.vdp ? BREAKPOINTS_BASE : 0);
+    }
+    return BADADDR;
 }
 
 void remove_rec_locked(BpRec* r)
