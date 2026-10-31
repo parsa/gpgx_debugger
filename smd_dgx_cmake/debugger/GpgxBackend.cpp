@@ -470,15 +470,21 @@ void GpgxBackend::requestPause(StopReason why)
 
 void GpgxBackend::serviceStoppedCpu()
 {
-    // Only a request the instruction hook could not deliver: the CPU retired no
-    // instruction during a whole frame. A STOP that a VBlank will end is left
-    // alone, so stepping through it still lands in the interrupt handler.
+    // Only a request the instruction hook could not deliver, or an armed run:
+    // the CPU retired no instruction during a whole frame. A STOP that a VBlank
+    // will end is left alone (it retires the handler's instructions every
+    // frame), so stepping through it still lands in the interrupt handler.
     const bool idleFrame = execCount_ == execCountAtFrame_;
     execCountAtFrame_ = execCount_;
     const unsigned stopped = m68k.stopped;
     if (!idleFrame || !(stopped & (kStopLevelStop | kStopLevelHalt | kStopLevelWait))) return;
     const bool step = stepInto_.load();
-    if (!pauseReason_.load() && !step) return;
+    // An armed run (runto, runcase) can never reach its return, address or
+    // instruction budget on a CPU that executes nothing: end it now rather
+    // than let it run out a wall-clock timeout.
+    const bool run = runActive_.load();
+    if (!pauseReason_.load() && !step && !run) return;
+    runActive_.store(false);
     pauseReason_.store(0);
     stepInto_.store(false);
     // This stop is not inside an instruction hook, so the next hook is the

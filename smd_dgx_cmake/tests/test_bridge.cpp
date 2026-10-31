@@ -1364,3 +1364,75 @@ TEST(stale_frame_boundary_request_overtaken_by_a_breakpoint_is_dropped)
     const std::string c = raw.cmd("runcase pc=218 sr=2700 a7=fff000 instr=200000 timeout=5000");
     CHECK(c.rfind("ok reason=budget", 0) == 0);
 }
+
+// ---------------------------------------------------------------------------
+// An armed run whose 68000 stops executing (double fault, STOP with every
+// interrupt masked) can never reach its return, address or instruction budget:
+// it ends at once, saying why, instead of running out the wall clock.
+// ---------------------------------------------------------------------------
+namespace {
+std::string hex(uint32_t v)
+{
+    char b[16];
+    std::snprintf(b, sizeof b, "%x", unsigned(v));
+    return b;
+}
+long long msSince(std::chrono::steady_clock::time_point t0)
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+}
+}
+
+TEST(armed_run_ends_promptly_when_the_68000_halts)
+{
+    Wired w(44);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(44)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    const auto t0 = std::chrono::steady_clock::now();
+    const std::string r = raw.cmd(
+        "runcase pc=" + hex(kHaltEntry) + " sr=2700 a7=fff000 mem=fff000:0000021e return instr=1000000 timeout=8000");
+    const long long ms = msSince(t0);
+    CHECK(r.rfind("ok reason=halted", 0) == 0);
+    CHECK(r.find(" timeout=1") == std::string::npos);
+    CHECK(ms < 2000);
+    // runto too.
+    M68kRegs regs = w.emu.backend()->getM68kRegs();
+    regs.pc = kHaltEntry; regs.sr = 0x2700; regs.a[7] = kInitSp;
+    w.emu.backend()->setM68kRegs(regs);
+    REQUIRE(raw.cmd("runto instr=1000000") == "ok");
+    CHECK(raw.cmd("wait 2000").find(" reason=halted") != std::string::npos);
+}
+
+TEST(armed_run_ends_promptly_when_the_68000_stops_for_good)
+{
+    Wired w(45);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(45)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    const auto t0 = std::chrono::steady_clock::now();
+    const std::string r = raw.cmd(
+        "runcase pc=" + hex(kStopEntry) + " sr=2700 a7=fff000 mem=fff000:0000021e return instr=1000000 timeout=8000");
+    CHECK(r.rfind("ok reason=stopped", 0) == 0);
+    CHECK(r.find(" timeout=1") == std::string::npos);
+    CHECK(msSince(t0) < 2000);
+}
+
+// A busy-wait on the Z80 bus still executes instructions: it is not "stopped",
+// and its instruction budget ends it, promptly.
+TEST(armed_run_on_a_z80_bus_wait_ends_on_its_budget)
+{
+    Wired w(46);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(46)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    const auto t0 = std::chrono::steady_clock::now();
+    const std::string r = raw.cmd(
+        "runcase pc=" + hex(kZ80BusWait) + " sr=2700 a7=fff000 mem=fff000:0000021e return instr=20000 timeout=8000");
+    CHECK(r.rfind("ok reason=budget", 0) == 0);
+    CHECK(msSince(t0) < 2000);
+}
