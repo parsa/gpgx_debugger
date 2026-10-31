@@ -809,6 +809,47 @@ TEST(bridge_runcase_after_many_watchpoint_stops_in_one_instruction)
     raw.cmd("bpclear");
 }
 
+// A Z80 stop inside a 68000 write (the write synchronised the Z80) leaves that
+// write unfinished; completing it would clobber the case's condition codes.
+TEST(bridge_runcase_after_a_z80_stop_inside_a_68000_write_keeps_its_flags)
+{
+    Wired w(34);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(34)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+
+    w.emu.backend()->resume();                               // boot releases the Z80
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    REQUIRE(w.emu.pauseAndWait());
+    {   // a few 68000 instructions into a frame: the Z80 (run after the 68000
+        // in each line) lags, so the write below runs Z80 instructions
+        const uint64_t f = w.emu.pauseSeq();
+        w.emu.gpgx()->requestFramePause();
+        w.emu.backend()->resume();
+        REQUIRE(w.emu.waitPause(f));
+        RunLimits few;
+        few.maxInstructions = 20;
+        const uint64_t g = w.emu.pauseSeq();
+        w.emu.gpgx()->armRun(few);
+        w.emu.backend()->resume();
+        REQUIRE(w.emu.waitPause(g));
+    }
+    Breakpoint zbp;
+    zbp.type = BpType::PC; zbp.cpu = Cpu::Z80; zbp.start = 0; zbp.end = 0xFFFF;   // anywhere
+    const int id = w.emu.backend()->addBreakpoint(zbp);
+    w.emu.parkM68kAt(kZ80BusWait + 8);                       // move.w #$100,$A11100
+    const uint64_t s = w.emu.pauseSeq();
+    w.emu.backend()->resume();
+    REQUIRE(w.emu.waitPause(s));
+    w.emu.backend()->removeBreakpoint(id);
+    REQUIRE(w.emu.gpgx()->stopInsideM68kInstruction());
+
+    const std::string r = raw.cmd("runcase pc=300 a7=fff000 sr=271f until=302");
+    CHECK(r.rfind("ok reason=address pc=302 ", 0) == 0);
+    CHECK(r.find(" sr=271f ") != std::string::npos);
+}
+
 TEST(bridge_runcase_from_a_save_state_is_deterministic)
 {
     Wired w(30);

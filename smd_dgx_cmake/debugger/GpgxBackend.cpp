@@ -478,6 +478,7 @@ void GpgxBackend::serviceStoppedCpu()
     // instruction we are standing on, not the one after it: let it run.
     standingOnNext_ = true;
     stopInInstr_ = false;
+    stopMidInstr_ = false;
     firePause(m68k_get_reg(M68K_REG_PC), Cpu::M68K, -1,
               (stopped & kStopLevelHalt) ? StopReason::Halted : StopReason::Stopped);
 }
@@ -602,7 +603,11 @@ void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t value)
             hit = matchBreakpoint(type, addr, 2);                       // opcode word
             if (hit >= 0) why = StopReason::Breakpoint;
         }
-        if (why != StopReason::None) { stopInInstr_ = true; firePause(addr, Cpu::M68K, hit, why); }
+        if (why != StopReason::None) {
+            stopInInstr_ = true;                // at its start: counted, retires next
+            stopMidInstr_ = false;
+            firePause(addr, Cpu::M68K, hit, why);
+        }
     } else if (type & (HOOK_M68K_R | HOOK_M68K_W)) {
         if (logOn_.load(std::memory_order_relaxed))
             logAccess(m68k.ppc & 0xFFFFFF, Cpu::M68K, AccessSpace::M68k, (type & HOOK_M68K_W) != 0, width, addr, value);
@@ -667,6 +672,14 @@ void GpgxBackend::armRun(const RunLimits& lim)
     runActive_.store(lim.any());
 }
 
+// Is the 68000 inside an instruction right now (called from a non-68000 hook)?
+// m68k_run executes while cycles < cycle_end; between its time slices, and
+// when stopped, cycles has reached cycle_end.
+bool GpgxBackend::m68kMidInstruction() const
+{
+    return m68k.cycles < m68k.cycle_end;
+}
+
 void GpgxBackend::serviceFramePause()
 {
     if (!framePauseReq_.exchange(false)) return;
@@ -674,6 +687,7 @@ void GpgxBackend::serviceFramePause()
     // a save state loaded now replays exactly. The next 68000 hook is the
     // instruction the CPU stands on.
     stopInInstr_ = false;
+    stopMidInstr_ = false;
     standingOnNext_ = true;
     atFrameBoundary_.store(true);
     firePause(m68k_get_reg(M68K_REG_PC), Cpu::M68K, -1, StopReason::FrameAdvance);
@@ -777,7 +791,10 @@ void GpgxBackend::watchHit(int bpId, uint32_t pc, Cpu cpu, AccessSpace space, bo
         lastAccess_.address = addr;
         lastAccess_.value   = width >= 4 ? value : value & ((1u << (8 * width)) - 1);
     }
-    stopInInstr_ = cpu == Cpu::M68K;           // a 68000 access: inside its instruction
+    // A 68000 access is inside its instruction; a Z80 access may be too, when
+    // a 68000 write synchronised the Z80 (BUSREQ/RESET).
+    stopInInstr_ = cpu == Cpu::M68K || m68kMidInstruction();
+    stopMidInstr_ = stopInInstr_;
     firePause(pc, cpu, bpId, StopReason::Watchpoint);
 }
 
@@ -828,6 +845,7 @@ void GpgxBackend::onM68kException(unsigned vector)
     if (vector < 64 && (excCatch_.load() >> vector) & 1) {
         const uint32_t before = m68k.pc;
         stopInInstr_ = false;                   // the faulting instruction never retires
+        stopMidInstr_ = true;                   // ...but the exception is unfinished
         firePause(x.pc, Cpu::M68K, -1, StopReason::Exception);
         // Moving PC here abandons the vector (see m68ki_jump_vector), and the
         // CPU then stands on the new PC like after any other stop: the next
@@ -1046,7 +1064,10 @@ void GpgxBackend::onZ80Exec(uint32_t pc)
     if (!brk) { hit = matchBreakpoint(HOOK_Z80_E, pc); brk = hit >= 0; }
     if (brk) {
         z80ResumeSkip_.store(int(pc));
-        stopInInstr_ = false;                   // the 68000 is between instructions
+        // Usually the 68000 is between instructions here, except when one of
+        // its writes (BUSREQ/RESET) ran the Z80 to catch up.
+        stopInInstr_ = m68kMidInstruction();
+        stopMidInstr_ = stopInInstr_;
         firePause(pc, Cpu::Z80, hit, hit >= 0 ? StopReason::Breakpoint : StopReason::Step);
     }
 }

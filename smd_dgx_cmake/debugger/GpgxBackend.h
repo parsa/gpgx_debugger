@@ -123,6 +123,9 @@ public:
     // Pause at the next frame boundary (reason FrameAdvance), where loading a
     // save state replays deterministically. The host calls serviceFramePause()
     // between frames; atFrameBoundary() is true while paused there.
+    // True while stopped inside an unfinished 68000 instruction or exception
+    // (resuming completes it). Read while paused.
+    bool stopInsideM68kInstruction() const { return stopMidInstr_; }
     void requestFramePause() { framePauseReq_.store(true); }
     void serviceFramePause();
     bool atFrameBoundary() const { return atFrameBoundary_.load(); }
@@ -206,6 +209,11 @@ private:
     // Whether the current stop was taken inside a 68000 instruction (its exec
     // hook or one of its accesses): that instruction is counted and retires.
     bool stopInInstr_ = true;
+    // Whether the current stop left a 68000 instruction (or exception) half
+    // done, so resuming completes it: a 68000 watchpoint, a caught exception,
+    // or a Z80 stop inside a 68000 write. State must not be replaced there.
+    bool stopMidInstr_ = false;
+    bool m68kMidInstruction() const;
     std::atomic<bool> framePauseReq_ {false};
     std::atomic<bool> atFrameBoundary_ {false};
 

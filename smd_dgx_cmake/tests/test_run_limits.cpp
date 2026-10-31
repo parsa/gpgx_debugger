@@ -20,6 +20,20 @@ bool runAndWait(t::Emu& e, const RunLimits& lim)
     return e.waitPause(s);
 }
 
+// Stop the 68000 a few instructions into a frame: the Z80 runs after the
+// 68000 in each line, so it now lags, and a 68000 write that synchronises the
+// Z80 (BUSREQ/RESET) runs Z80 instructions inside that write.
+bool lagZ80BehindM68k(t::Emu& e)
+{
+    const uint64_t f = e.pauseSeq();
+    e.gpgx()->requestFramePause();
+    e.backend()->resume();
+    if (!e.waitPause(f) || !e.gpgx()->atFrameBoundary()) return false;
+    RunLimits few;
+    few.maxInstructions = 20;
+    return runAndWait(e, few) && e.pauseReason() == StopReason::Budget;
+}
+
 } // namespace
 
 TEST(run_to_return_stops_in_the_caller_with_the_stack_unwound)
@@ -149,6 +163,36 @@ TEST(instruction_budget_after_a_z80_stop)
     REQUIRE(runAndWait(e, budget));
     CHECK(e.pauseReason() == StopReason::Budget);
     CHECK_EQ(e.backend()->getM68kRegs().pc, kSubEntry);
+}
+
+// A 68000 write to the Z80 RESET/BUSREQ registers first runs the Z80 up to the
+// 68000's time, inside that write. A Z80 stop there is inside a 68000
+// instruction, which still retires after the stop.
+TEST(instruction_budget_after_a_z80_stop_inside_a_68000_write)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    e.backend()->resume();                               // boot releases the Z80
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    REQUIRE(e.pauseAndWait());
+    REQUIRE(lagZ80BehindM68k(e));
+
+    Breakpoint zbp;
+    zbp.type = BpType::PC; zbp.cpu = Cpu::Z80; zbp.start = 0; zbp.end = 0xFFFF;   // anywhere
+    const int id = e.backend()->addBreakpoint(zbp);
+    e.parkM68kAt(kZ80BusWait + 8);                       // move.w #$100,$A11100 syncs the Z80
+    const uint64_t s = e.pauseSeq();
+    e.backend()->resume();
+    REQUIRE(e.waitPause(s));
+    e.backend()->removeBreakpoint(id);
+    REQUIRE(e.pauseCpu() == Cpu::Z80);
+    CHECK(e.gpgx()->stopInsideM68kInstruction());
+
+    RunLimits budget;
+    budget.maxInstructions = 1;                          // the interrupted write
+    REQUIRE(runAndWait(e, budget));
+    CHECK(e.pauseReason() == StopReason::Budget);
+    CHECK_EQ(e.backend()->getM68kRegs().pc, kZ80BusWait + 0x10);
 }
 
 // And when the stop on a caught exception is simply continued: resuming

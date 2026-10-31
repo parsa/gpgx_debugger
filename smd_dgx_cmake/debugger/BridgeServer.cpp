@@ -870,18 +870,15 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         // an older one, before the baseline below is taken.
         const std::string settled = settlePaused(client);
         if (!settled.empty()) return settled;
-        // A watchpoint or caught-exception stop sits inside an unfinished
-        // instruction (or exception), which would complete over the case's
-        // state on resume. Step to the next instruction boundary first; one
+        // A watchpoint, a caught exception, or a Z80 stop reached while a 68000
+        // write synchronised the Z80 sits inside an unfinished instruction (or
+        // exception), which would complete over the case's state on resume. Step to the next instruction boundary first; one
         // instruction can trip a watchpoint many times (MOVEM), so keep going,
         // but never apply the case while still inside one.
-        auto midInstruction = [&] {
-            const StopReason r = g->lastStopReason();
-            return r == StopReason::Watchpoint || r == StopReason::Exception;
-        };
+        auto midInstruction = [&] { return g->stopInsideM68kInstruction(); };
         for (int tries = 0; tries < 1024 && midInstruction(); ++tries) {
             const uint64_t s0 = seenStop();
-            be->stepInto(Cpu::M68K);
+            be->stepInto(Cpu::M68K);            // finishes it; stops at the next boundary
             for (int i = 0; i < 2000 && seenStop() == s0; ++i) {
                 if (stopFlag_.load()) return "err stopping";
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
