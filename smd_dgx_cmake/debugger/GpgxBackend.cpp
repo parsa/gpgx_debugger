@@ -1048,10 +1048,12 @@ void GpgxBackend::firePause(uint32_t pc, Cpu cpu, int bpId, StopReason why)
         std::lock_guard<std::mutex> lk(reqMx_);
         stopEpoch_.store(runEpoch_.load());
         if (stopSectionHook_) stopSectionHook_(0);
+        // Counted before it is visible as paused: whoever sees paused_ also
+        // sees that this stop is not published yet (BridgeServer::settlePaused).
+        stopsFired_.fetch_add(1);
         paused_.store(true);
         if (stopSectionHook_) stopSectionHook_(1);
         cancelRunRequests();
-        stopsFired_.fetch_add(1);
     }
     if (pauseCb_) pauseCb_(pc, cpu);
     // Block the emulation thread until resumed. While blocked, pump host
