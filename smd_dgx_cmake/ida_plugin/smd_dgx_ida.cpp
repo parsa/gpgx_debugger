@@ -32,6 +32,7 @@
 // emulator (NO Qt here)
 #include "debugger/EmuHost.h"
 #include "debugger/BridgeServer.h"
+#include "debugger/HostRunSync.h"
 #include "platform/AudioOutput.h"
 
 #include "ida_registers.h"
@@ -63,25 +64,9 @@ void smd_dgx_unregister_z80_actions();
 // ---------------------------------------------------------------------------
 namespace {
 
-struct EventList {
-    std::mutex mx;
-    std::deque<debug_event_t> q;
-
-    void enqueue(const debug_event_t& ev) {
-        std::lock_guard<std::mutex> lk(mx);
-        q.push_back(ev);
-    }
-    bool retrieve(debug_event_t* out, bool* more) {
-        std::lock_guard<std::mutex> lk(mx);
-        if (q.empty()) return false;
-        *out = q.front();
-        q.pop_front();
-        *more = !q.empty();
-        return true;
-    }
-};
-
-EventList g_events;
+// Events for IDA, and IDA's view of the run state kept consistent with the
+// emulator without bridge clients ever waiting for IDA (HostRunSync.h).
+HostRunSync<debug_event_t> g_sync;
 EmuHost*  g_host = nullptr;
 
 // Why the process last stopped, in the bridge's key=value format (see
@@ -264,7 +249,7 @@ void on_emu_event(const DebugEvent& ev)
         mi.base = 0;
         mi.size = 0;
         mi.rebase_to = BADADDR;
-        g_events.enqueue(ida_ev);
+        g_sync.pushOther(ida_ev);
         // No synthetic suspend here: start_process() requests a real pause, so
         // the emulation thread reports PROCESS_SUSPENDED at the actual PC a
         // moment later. Enqueueing one as well made IDA stop twice on startup.
@@ -303,13 +288,13 @@ void on_emu_event(const DebugEvent& ev)
             ida_ev.set_eid(PROCESS_SUSPENDED);
         }
         ida_ev.ea = ev.pc;
-        g_events.enqueue(ida_ev);
+        g_sync.pushStop(ida_ev);
         break;
     case DebugEvent::Type::Stopped:
         apply_codemap(ev.changed);
         ida_ev.set_exit_code(PROCESS_EXITED, 0);               // VERIFY-9.3
         ida_ev.ea = BADADDR;
-        g_events.enqueue(ida_ev);
+        g_sync.pushOther(ida_ev);
         break;
     case DebugEvent::Type::Resumed:
         if (g_audio) g_audio->pause(false);
@@ -462,42 +447,61 @@ void cancel_bridge_ui_requests()
     }
 }
 
-struct run_ctl_req : public exec_request_t {
-    bool wantRun;
-    bool ok = false;
-    bool notYet = false;
-    explicit run_ctl_req(bool run) : wantRun(run) {}
+// IDA holds a stop that a bridge client has run past: continue it, so it picks
+// up the newer stop instead (HostRunSync). Posted without waiting; runs on the
+// main thread whenever IDA gets to it. Should IDA not have applied the stop
+// yet, dbg_suspend_process posts it again once it has.
+std::mutex g_continue_mutex;
+std::map<int, std::shared_ptr<std::atomic<bool>>> g_continue_requests;
+bool g_continue_closed = false;
+
+struct continue_req : public exec_request_t {
+    std::shared_ptr<std::atomic<bool>> completed;
+    explicit continue_req(std::shared_ptr<std::atomic<bool>> done) : completed(std::move(done)) {}
     ssize_t idaapi execute() override {
-        const int st = get_process_state();
-        if (st == DSTATE_NOTASK) return 0;          // nothing being debugged
-        // The emulator stopped but IDA has not processed that stop yet: it
-        // still believes the process runs, so continuing now would be a no-op
-        // and the stop would stick. The caller retries.
-        if (wantRun && st == DSTATE_RUN && g_host && g_host->backend()->isPaused()) {
-            notYet = true;
-            return 0;
-        }
-        // Only correct a real mismatch. Asking IDA to continue a process it
-        // already believes is running would be a second, spurious resume.
-        if (wantRun && st == DSTATE_SUSP)  ok = continue_process();
-        else if (!wantRun && st == DSTATE_RUN) ok = suspend_process();
-        else ok = true;                             // already where we want it
+        if (g_sync.continueWanted() && get_process_state() == DSTATE_SUSP)
+            continue_process();
+        completed->store(true);
+        delete this;    // NOWAIT ownership, as apply_codemap_req
         return 0;
     }
 };
 
+void post_continue()
+{
+    std::lock_guard<std::mutex> lock(g_continue_mutex);
+    if (g_continue_closed) return;
+    for (auto it = g_continue_requests.begin(); it != g_continue_requests.end();)
+        if (it->second->load()) it = g_continue_requests.erase(it);
+        else ++it;
+    auto completed = std::make_shared<std::atomic<bool>>(false);
+    auto* req = new continue_req(completed);
+    const int id = int(execute_sync(*req, MFF_WRITE | MFF_NOWAIT));
+    if (!completed->load()) {
+        if (id >= 0) g_continue_requests.emplace(id, completed);
+        else delete req;
+    }
+}
+
+void cancel_continue_requests(bool close)
+{
+    std::map<int, std::shared_ptr<std::atomic<bool>>> pending;
+    {
+        std::lock_guard<std::mutex> lock(g_continue_mutex);
+        g_continue_closed = close;
+        pending.swap(g_continue_requests);
+    }
+    for (const auto& entry : pending)
+        if (!entry.second->load()) cancel_exec_request(entry.first);
+}
+
+// A bridge client runs the machine. Never waits for IDA's main thread.
 bool host_resume()
 {
-    // A bridge client thread: it may wait for IDA to catch up with a stop.
-    for (int attempt = 0; attempt < 400; ++attempt) {
-        run_ctl_req r(true);
-        if (!execute_bridge_ui(r)) return false;
-        if (!r.notYet) return r.ok;
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-    return false;
+    if (!g_host) return false;
+    g_sync.run([] { if (g_host) g_host->backend()->resume(); });
+    return true;
 }
-bool host_pause()  { run_ctl_req r(false); return execute_bridge_ui(r) && r.ok; }
 
 void translate_bpt(ea_t ea, int size, bpttype_t itype,
                    uint8_t& t1, uint8_t& t2, uint8_t& vdp, uint32_t& start, uint32_t& end);
@@ -1093,16 +1097,18 @@ drc_t start_process(const char* path, const char* input_path)
         g_bps.clear();
     }
     stop_audio();
-    { std::lock_guard<std::mutex> lk(g_events.mx); g_events.q.clear(); }
+    g_sync.clear();
+    g_sync.setPostContinue(post_continue);
+    cancel_continue_requests(false);
 
     g_host->addEventSink(on_emu_event);
     g_host->backend()->setConditionEvaluator(evaluate_condition);
 
     // Bridge clients must not mutate run state or breakpoints behind IDA's
-    // back; route them through IDA instead. See the block above.
+    // back. Running goes through g_sync (never waiting for IDA); breakpoints
+    // through IDA itself. See EmuHost::HostMutations.
     EmuHost::HostMutations hm;
     hm.resume           = host_resume;
-    hm.pause            = host_pause;
     hm.addBreakpoint    = host_add_bpt;
     hm.removeBreakpoint = host_del_bpt;
     hm.clearBreakpoints = host_clear_bpts;
@@ -1188,6 +1194,7 @@ ssize_t idaapi debugger_callback(void*, int msgid, va_list va)
         // Reject/cancel host-side work before joining any bridge client.
         if (g_bridge) g_bridge->requestStop();
         cancel_bridge_ui_requests();
+        cancel_continue_requests(true);
         // Close the socket before the host: its handler holds an EmuHost*.
         delete g_bridge; g_bridge = nullptr;
         if (g_host) { g_host->stop(); }
@@ -1199,7 +1206,7 @@ ssize_t idaapi debugger_callback(void*, int msgid, va_list va)
         gdecode_t* code = va_arg(va, gdecode_t*);
         debug_event_t* event = va_arg(va, debug_event_t*);
         bool more = false;
-        *code = g_events.retrieve(event, &more)
+        *code = g_sync.retrieve(event, &more)
                     ? (more ? GDE_MANY_EVENTS : GDE_ONE_EVENT)
                     : GDE_NO_EVENT;
         retcode = DRC_OK;
@@ -1209,11 +1216,15 @@ ssize_t idaapi debugger_callback(void*, int msgid, va_list va)
     case debugger_t::ev_resume: {
         debug_event_t* event = va_arg(va, debug_event_t*);
         dbg_notification_t req = get_running_notification();
+        // False when a bridge client already ran the machine past the stop IDA
+        // is resuming from: it must not be resumed again from a newer one.
+        const bool drive = g_sync.releaseHold();
         switch (event->eid()) {
         case STEP:
         case PROCESS_SUSPENDED:
         case EXCEPTION:
-            if (req == dbg_null || req == dbg_run_to)
+        case BREAKPOINT:
+            if (drive && (req == dbg_null || req == dbg_run_to))
                 if (g_host) g_host->backend()->resume();
             break;
         case PROCESS_EXITED:
@@ -1230,7 +1241,7 @@ ssize_t idaapi debugger_callback(void*, int msgid, va_list va)
         break;
 
     case debugger_t::ev_thread_continue:
-        if (g_host) g_host->backend()->resume();
+        if (g_sync.releaseHold() && g_host) g_host->backend()->resume();
         retcode = DRC_OK;
         break;
 
@@ -1238,6 +1249,13 @@ ssize_t idaapi debugger_callback(void*, int msgid, va_list va)
         thid_t tid = va_argi(va, thid_t);           (void)tid;
         resume_mode_t resmod = va_argi(va, resume_mode_t);
         if (!g_host) { retcode = DRC_FAILED; break; }
+        // The machine already left the stop IDA would step from (a bridge
+        // client ran it): there is nothing to step. IDA's resume follows and
+        // finds the newer stop queued, if there is one.
+        if (!g_sync.atHeldStop() && (resmod == RESMOD_INTO || resmod == RESMOD_OVER)) {
+            retcode = DRC_OK;
+            break;
+        }
         switch (resmod) {
         case RESMOD_INTO: g_host->backend()->stepInto(Cpu::M68K); retcode = DRC_OK; break;
         case RESMOD_OVER: g_host->backend()->stepOver(Cpu::M68K); retcode = DRC_OK; break;
@@ -1440,6 +1458,10 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
                 const int bptev = va_arg(va, int);
                 const bpt_t* b = va_arg(va, bpt_t*);
                 on_bpt_changed(bptev, b);
+            } else if (code == dbg_suspend_process) {
+                // IDA has now applied a stop that a bridge client already ran
+                // past (the continue posted then found IDA not yet suspended).
+                if (g_host && g_sync.continueWanted()) post_continue();
             }
             return 0;
         }
@@ -1467,6 +1489,7 @@ struct smd_dgx_plugmod_t : public plugmod_t, public event_listener_t {
     {
         if (g_bridge) g_bridge->requestStop();
         cancel_bridge_ui_requests();
+        cancel_continue_requests(true);
         del_idc_func(kStopFunc.name);
         del_idc_func(kCatchFunc.name);
         del_idc_func(kOverrideFunc.name);

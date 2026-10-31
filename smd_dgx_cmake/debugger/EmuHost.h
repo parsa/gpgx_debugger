@@ -109,13 +109,25 @@ public:
     // Each returns true if it handled the request. A host that installs
     // nothing — the standalone app — falls through to the backend.
     //
-    // Called on a bridge client thread. An implementation may block (IDA's
-    // does, marshalling onto its main thread) but must NOT call back into
+    // Called on a bridge client thread, and must NOT call back into
     // EmuHost::invoke: the emulation thread may itself be waiting on the host,
     // and that pair of waits is a deadlock.
+    //
+    // resume runs the machine NOW and must not wait for the host's own thread
+    // (IDA's main thread is routinely busy for seconds: a script pumping its
+    // events, an analysis). The host catches its own model up afterwards
+    // (HostRunSync). Every bridge command that runs the machine — resume,
+    // frameadv, stepframe, stepi/stepo, runto, runcase — arms what it needs
+    // and then goes through it; false means the host refused (shutting down),
+    // and the machine must then not be run behind its back.
+    //
+    // There is no pause hook: a pause always goes straight to the emulator,
+    // whatever the host believes, and reaches the host as an ordinary stop.
+    //
+    // The breakpoint hooks do wait for the host: IDA's breakpoint list is
+    // the authority and the id it assigns is the one the client is told.
     struct HostMutations {
         std::function<bool()>                        resume;
-        std::function<bool()>                        pause;
         std::function<bool(const Breakpoint&, int*)> addBreakpoint;   // out: id
         std::function<bool(int)>                     removeBreakpoint;
         std::function<bool()>                        clearBreakpoints;

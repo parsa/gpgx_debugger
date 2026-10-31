@@ -59,12 +59,17 @@ private:
         uint32_t pc;
         int32_t  bpId;      // which breakpoint, or -1
         std::string detail; // stop description: "reason=<name> ..." (Paused only)
+        uint64_t stopSeq = 0;  // the host's stop number (Paused only)
     };
 
     struct Client {
         long long fd = -1;
         std::deque<QueuedEvent> events;
         uint64_t dropped = 0;       // overflowed events; reported once, then cleared
+        // Stops up to this one were already reported to this client by the
+        // command that caused them (runcase, stepframe): `wait` skips them, or
+        // it would hand back a stop the client has seen as if it were new.
+        uint64_t reportedSeq = 0;
         // Snapshots for `snap`/`diff`, per client and per region: the classic
         // RAM-search loop, done here so an agent compares 64K of memory
         // without hauling it across the wire as ASCII hex every round.
@@ -76,6 +81,11 @@ private:
     void serveClient(std::shared_ptr<Client> c);    // one connection
     std::string handle(const std::string& line, Client& c);
     std::string settlePaused(Client& c);
+    // Run the machine through the host when one is installed (see
+    // EmuHost::HostMutations::resume), straight otherwise. False: the host
+    // refused, nothing ran.
+    bool runMachine();
+    void startRunAfresh();
     std::string handleEvents(Client& c, int max);
     std::string handleWait(Client& c, int timeoutMs);
     void onEmuEvent(const void* ev);                // DebugEvent, type-erased for the header

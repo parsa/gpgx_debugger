@@ -302,7 +302,8 @@ void BridgeServer::onEmuEvent(const void* evp)
     if (ev.type == DebugEvent::Type::Paused) { lastStopDetail_ = detail; lastStopSeq_ = ev.stopSeq; }
     for (auto& c : clients_) {
         if (c->events.size() >= 256) { c->events.pop_front(); ++c->dropped; }
-        c->events.push_back(QueuedEvent{ seq, uint8_t(ev.type), uint8_t(ev.cpu), ev.pc, ev.bpId, detail });
+        c->events.push_back(QueuedEvent{ seq, uint8_t(ev.type), uint8_t(ev.cpu), ev.pc, ev.bpId, detail,
+                                         ev.type == DebugEvent::Type::Paused ? ev.stopSeq : 0 });
     }
     eventCv_.notify_all();
 }
@@ -362,6 +363,8 @@ std::string BridgeServer::handleWait(Client& c, int timeoutMs)
                 c.events.pop_front();
                 // Only a stop ends a wait. Resumes and starts are still drained
                 // so they cannot make the next wait return instantly.
+                if (e.type == uint8_t(DebugEvent::Type::Paused) && e.stopSeq <= c.reportedSeq)
+                    continue;
                 if (e.type == uint8_t(DebugEvent::Type::Paused) ||
                     e.type == uint8_t(DebugEvent::Type::Stopped)) {
                     hit = e;
@@ -381,6 +384,23 @@ std::string BridgeServer::handleWait(Client& c, int timeoutMs)
       << " seq=" << hit.seq;
     if (!hit.detail.empty()) o << " " << hit.detail;
     return o.str();
+}
+
+// A command that starts a run of its own (everything but a plain resume, which
+// continues whatever was going on) drops what an earlier one left pending: the
+// rest of a frame advance a breakpoint cut short, a request nothing answered.
+void BridgeServer::startRunAfresh()
+{
+    host_->advanceFrames(0);
+    host_->gpgx()->cancelRunRequests();
+}
+
+bool BridgeServer::runMachine()
+{
+    const auto& hm = host_->hostMutations();
+    if (hm.resume) return hm.resume();
+    host_->backend()->resume();
+    return true;
 }
 
 // Pause the machine if it runs, then wait until this bridge has seen the stop
@@ -565,8 +585,9 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         int n = (int)nv;
         if (n <= 0) n = 1;
         if (n > 100000) return "err too many frames";
+        startRunAfresh();
         host_->advanceFrames(n);
-        be->resume();
+        if (!runMachine()) { host_->advanceFrames(0); return "err host declined to run"; }
         return "ok";
     }
 
@@ -870,6 +891,7 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         // an older one, before the baseline below is taken.
         const std::string settled = settlePaused(client);
         if (!settled.empty()) return settled;
+        startRunAfresh();
         // A watchpoint, a caught exception, or a Z80 stop reached while a 68000
         // write synchronised the Z80 sits inside an unfinished instruction (or
         // exception), which would complete over the case's state on resume. Step to the next instruction boundary first; one
@@ -878,7 +900,8 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         auto midInstruction = [&] { return g->stopInsideM68kInstruction(); };
         for (int tries = 0; tries < 1024 && midInstruction(); ++tries) {
             const uint64_t s0 = seenStop();
-            be->stepInto(Cpu::M68K);            // finishes it; stops at the next boundary
+            g->armStepInto(Cpu::M68K);          // finishes it; stops at the next boundary
+            if (!runMachine()) return "err host declined to run";
             for (int i = 0; i < 2000 && seenStop() == s0; ++i) {
                 if (stopFlag_.load()) return "err stopping";
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -959,7 +982,11 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         std::ostringstream o;
         {
             std::lock_guard<std::mutex> lk(clientsMx_);
-            o << "ok " << (lastStopDetail_.empty() ? std::string("reason=none") : lastStopDetail_);
+            // Only a stop of this run describes it (an unanswered timeout
+            // pause leaves the previous stop's detail in place).
+            const bool own = lastStopSeq_ != seq0;
+            o << "ok " << (!own || lastStopDetail_.empty() ? std::string("reason=none") : lastStopDetail_);
+            client.reportedSeq = lastStopSeq_;
         }
         if (timedOut) o << " timeout=1";
         const M68kRegs r = be->getM68kRegs();
@@ -1023,6 +1050,7 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         // reached (and the limits spent) before the resume below runs past it.
         const std::string settled = settlePaused(client);
         if (!settled.empty()) return settled;
+        startRunAfresh();
         GpgxBackend* g = host_->gpgx();
         if (!host_->invoke([&] {
                 if (toReturn) {
@@ -1108,18 +1136,17 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         return o.str();
     }
 
+    // Straight to the emulator, whatever a host believes: it learns of the
+    // stop like of any other. Asking the host first used to be a no-op when it
+    // thought the process was already suspended, and the machine ran on.
     if (cmd == "pause") {
-        const auto& hm = host_->hostMutations();
-        const bool handled = hm.pause && hm.pause();
         if (stopFlag_.load()) return "err stopping";
-        if (!handled) be->pause();
+        be->pause();
         return "ok";
     }
     if (cmd == "resume") {
-        const auto& hm = host_->hostMutations();
-        const bool handled = hm.resume && hm.resume();
         if (stopFlag_.load()) return "err stopping";
-        if (!handled) be->resume();
+        if (!runMachine()) return "err host declined to run";
 
         // Do not return while the caller could still observe the stale pause.
         // "Still paused" is not the same as "did not move": a breakpoint one
@@ -1149,13 +1176,18 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         if (n == 0 || n > 100000) return "err bad frame count";
 
         const uint64_t before = host_->stopCount();
+        startRunAfresh();
         host_->advanceFrames((int)n);
-        be->resume();
+        if (!runMachine()) { host_->advanceFrames(0); return "err host declined to run"; }
 
         // Frames are ~17 ms; allow generously for a breakpoint landing first.
         for (int i = 0; i < 2000 && host_->stopCount() == before; ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         if (host_->stopCount() == before) return "err frame did not complete";
+        {
+            std::lock_guard<std::mutex> lk(clientsMx_);
+            client.reportedSeq = host_->stopCount();
+        }
 
         char out[160];
         std::snprintf(out, sizeof out, "ok pc=%06X stops=%llu frames=%llu",
@@ -1167,7 +1199,10 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
     // optional trailing "z80" selects the sound CPU
     if (cmd == "stepi" || cmd == "stepo") {
         const Cpu cpu = (arg() == "z80") ? Cpu::Z80 : Cpu::M68K;
-        if (cmd == "stepi") be->stepInto(cpu); else be->stepOver(cpu);
+        GpgxBackend* g = host_->gpgx();
+        startRunAfresh();
+        if (cmd == "stepi") g->armStepInto(cpu); else g->armStepOver(cpu);
+        if (!runMachine()) { g->cancelRunRequests(); return "err host declined to run"; }
         return "ok";
     }
 

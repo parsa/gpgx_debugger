@@ -71,6 +71,12 @@ public:
     void stepInto(Cpu cpu) override;
     void stepOver(Cpu cpu) override;
     bool isPaused() const override { return paused_.load(); }
+    // Arm a step without running: whoever runs the machine next (a host that
+    // must be told, see EmuHost::HostMutations) completes it.
+    void armStepInto(Cpu cpu);
+    void armStepOver(Cpu cpu);
+    // Drop every pending stop request: pause, steps, frame-boundary pause.
+    void cancelRunRequests();
 
     void onPaused(PauseCb cb)  override { pauseCb_  = std::move(cb); }
     void onResumed(ResumeCb cb) override { resumeCb_ = std::move(cb); }
@@ -167,7 +173,7 @@ private:
     uint16_t opcodeAt(uint32_t pc) const;
     void     onZ80Exec(uint32_t pc);
     void     onM68kException(unsigned vector);
-    void     stepOverZ80();
+    void     armStepOverZ80();
     void     trackZ80Call(uint16_t pc);
     uint8_t  z80ByteAt(uint16_t pc) const;
 
@@ -182,6 +188,8 @@ private:
     std::atomic<int>  lastBpId_ {-1};      // breakpoint behind the current stop
     std::atomic<uint8_t> lastReason_ {0};  // StopReason of the current stop
     std::atomic<uint8_t> pauseReason_ {0}; // pending pause request (StopReason), 0 = none
+    // Orders a pause request against the machine stopping (see requestPause).
+    std::mutex reqMx_;
     std::atomic<bool> stepInto_ {false};
     std::atomic<int>  stepOverAddr_ {-1};
     // The Z80 needs its own: it retires thousands of instructions per frame,

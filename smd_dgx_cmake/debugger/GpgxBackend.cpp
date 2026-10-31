@@ -458,8 +458,15 @@ std::vector<Breakpoint> GpgxBackend::getBreakpoints() { std::lock_guard<std::mut
 // ---------------------------------------------------------------------------
 // Control
 // ---------------------------------------------------------------------------
+// A pause asked of a machine already paused is satisfied: arming it would stop
+// whatever runs next, one instruction in, for no reason anyone remembers.
 void GpgxBackend::pause()   { requestPause(StopReason::Pause); }
-void GpgxBackend::requestPause(StopReason why) { pauseReason_.store(uint8_t(why)); }
+void GpgxBackend::requestPause(StopReason why)
+{
+    std::lock_guard<std::mutex> lk(reqMx_);
+    if (paused_.load()) return;
+    pauseReason_.store(uint8_t(why));
+}
 
 void GpgxBackend::serviceStoppedCpu()
 {
@@ -483,16 +490,36 @@ void GpgxBackend::serviceStoppedCpu()
               (stopped & kStopLevelHalt) ? StopReason::Halted : StopReason::Stopped);
 }
 void GpgxBackend::resume()  { paused_.store(false); if (resumeCb_) resumeCb_(); }
-void GpgxBackend::stepInto(Cpu cpu)
+void GpgxBackend::cancelRunRequests()
 {
-    paused_.store(false);
+    pauseReason_.store(0);
+    stepInto_.store(false);
+    stepIntoZ80_.store(false);
+    stepOverAddr_.store(-1);
+    stepOverAddrZ80_.store(-1);
+    framePauseReq_.store(false);
+}
+
+void GpgxBackend::armStepInto(Cpu cpu)
+{
     if (cpu == Cpu::Z80) stepIntoZ80_.store(true);
     else                 stepInto_.store(true);
+}
+void GpgxBackend::stepInto(Cpu cpu)
+{
+    armStepInto(cpu);
+    paused_.store(false);
 }
 
 void GpgxBackend::stepOver(Cpu cpu)
 {
-    if (cpu == Cpu::Z80) { stepOverZ80(); return; }
+    armStepOver(cpu);
+    resume();
+}
+
+void GpgxBackend::armStepOver(Cpu cpu)
+{
+    if (cpu == Cpu::Z80) { armStepOverZ80(); return; }
 
     uint32_t pc = m68k_get_reg(M68K_REG_PC);
     const cpu_memory_map* map = &m68k.memory_map[(pc >> 16) & 0xFF];
@@ -540,8 +567,11 @@ void GpgxBackend::stepOver(Cpu cpu)
     } else if ((opc & 0xFF00) == 0x6100) {
         int off = (opc & 0xFF) == 0 ? 2 : (opc & 0xFF) == 0xFF ? 3 : 1;
         stepOverAddr_.store(static_cast<int>(pc + off * 2));
-    } else { stepInto_.store(true); return; }
-    paused_.store(false); if (resumeCb_) resumeCb_();
+    } else {
+        // Nothing to step over: a plain step. (It used to arm the step without
+        // running, leaving it pending for whatever resumed the machine next.)
+        stepInto_.store(true);
+    }
 }
 
 bool GpgxBackend::loadRom(const char* path)
@@ -887,7 +917,14 @@ void GpgxBackend::firePause(uint32_t pc, Cpu cpu, int bpId, StopReason why)
     if (abandoned_.load()) return;      // shutting down: do not park the thread
     lastBpId_.store(bpId);
     lastReason_.store(uint8_t(why));
-    paused_.store(true);
+    {
+        // This stop answers every request still pending — a pause, a step, a
+        // frame-boundary pause — whichever of them it was meant for. Left
+        // armed, one would stop some later, unrelated run.
+        std::lock_guard<std::mutex> lk(reqMx_);
+        paused_.store(true);
+        cancelRunRequests();
+    }
     if (pauseCb_) pauseCb_(pc, cpu);
     // Block the emulation thread until resumed. While blocked, pump host
     // commands (resume/step/read) so run-control can proceed — nested-loop
@@ -1026,7 +1063,7 @@ void GpgxBackend::trackZ80Call(uint16_t pc)
     else if (!callstackZ80_.empty()) callstackZ80_.pop_back();
 }
 
-void GpgxBackend::stepOverZ80()
+void GpgxBackend::armStepOverZ80()
 {
     const uint16_t pc = Z80.pc.w.l;
     const uint8_t  op = z80ByteAt(pc);
@@ -1043,11 +1080,9 @@ void GpgxBackend::stepOverZ80()
         break;
     default: break;
     }
-    if (len == 0) { stepInto(Cpu::Z80); return; }         // nothing to step over
+    if (len == 0) { armStepInto(Cpu::Z80); return; }      // nothing to step over
 
     stepOverAddrZ80_.store(int(uint16_t(pc + len)));
-    paused_.store(false);
-    if (resumeCb_) resumeCb_();
 }
 
 void GpgxBackend::onZ80Exec(uint32_t pc)

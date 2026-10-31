@@ -10,10 +10,13 @@
 #include "fixture.h"
 
 #include "debugger/BridgeServer.h"
+#include "debugger/HostRunSync.h"
 #include "debugger/RemoteBackend.h"
 #include "debugger/SocketCompat.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <thread>
 
 using namespace synth;
@@ -477,14 +480,13 @@ TEST(bridge_routes_mutations_through_the_host_when_one_is_installed)
     REQUIRE(raw.connect(portFor(17)));
 
     struct Seen {
-        int resume = 0, pause = 0, add = 0, del = 0, clear = 0;
+        int resume = 0, add = 0, del = 0, clear = 0;
     } seen;
 
     EmuHost::HostMutations hm;
     // A host that claims an operation must actually perform it — IDA reaches
     // the backend through ev_resume; here we stand in for that.
     hm.resume = [&] { ++seen.resume; w.emu.backend()->resume(); return true; };
-    hm.pause  = [&] { ++seen.pause;  w.emu.backend()->pause();  return true; };
     hm.addBreakpoint = [&](const Breakpoint&, int* id) {
         ++seen.add; if (id) *id = 4242; return true;
     };
@@ -500,7 +502,8 @@ TEST(bridge_routes_mutations_through_the_host_when_one_is_installed)
     CHECK_STR(raw.cmd("bpclear"), "ok");
 
     CHECK_EQ(seen.resume, 1);
-    CHECK_EQ(seen.pause,  1);
+    // A pause is not the host's to grant: it reaches the emulator directly.
+    CHECK(raw.cmd("wait 2000").rfind("ok paused", 0) == 0);
     CHECK_EQ(seen.add,    1);
     CHECK_EQ(seen.del,    1);
     CHECK_EQ(seen.clear,  1);
@@ -1066,4 +1069,298 @@ TEST(bridge_rejects_absurd_sizes_instead_of_allocating)
     CHECK(huge.empty());
     const auto zero = w.remote.readMemory(0, 0);
     CHECK(zero.empty());
+}
+
+// ---------------------------------------------------------------------------
+// Run control with a host (IDA) installed. The host keeps its own model of the
+// run state, so every bridge command that runs the machine must go through the
+// host's resume hook: one that resumes the backend behind its back leaves IDA
+// believing in a stop that is long gone (the pocahontas-decomp wedge).
+// ---------------------------------------------------------------------------
+TEST(bridge_runs_the_machine_only_through_the_host)
+{
+    Wired w(36);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(36)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+
+    std::atomic<int> resumes{0};
+    EmuHost::HostMutations hm;
+    hm.resume = [&] { ++resumes; w.emu.backend()->resume(); return true; };
+    w.emu.host()->setHostMutations(hm);
+
+    auto ran = [&](const std::string& c, bool waitStop) {
+        const int before = resumes.load();
+        const std::string r = raw.cmd(c);
+        if (waitStop) raw.cmd("wait 3000");
+        return r.rfind("ok", 0) == 0 && resumes.load() == before + 1;
+    };
+    CHECK(ran("frameadv 1", true));
+    CHECK(ran("stepframe 1", false));
+    CHECK(ran("stepi", true));
+    CHECK(ran("stepo", true));
+    CHECK(ran("runto instr=10", true));
+    CHECK(ran("resume", false));
+    raw.cmd("pause");
+    raw.cmd("wait 3000");
+    w.emu.host()->setHostMutations({});
+}
+
+// A pause must reach the emulator whatever the host believes about it: a host
+// that thinks the process is already suspended used to swallow it, and the
+// emulator ran on with every later command failing "could not pause".
+TEST(bridge_pause_stops_a_running_emulator_whatever_the_host_believes)
+{
+    Wired w(37);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(37)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+
+    // The host used to be asked first, and a host that believed the process
+    // already suspended (IDA after a stale stop) answered "done" and did
+    // nothing. There is no such hook any more; the host is still installed.
+    EmuHost::HostMutations hm;
+    hm.resume = [&] { w.emu.backend()->resume(); return true; };
+    w.emu.host()->setHostMutations(hm);
+
+    REQUIRE(raw.cmd("resume").rfind("ok", 0) == 0);
+    CHECK_STR(raw.cmd("pause"), "ok");
+    CHECK(raw.cmd("wait 2000").rfind("ok paused", 0) == 0);
+    CHECK(w.emu.backend()->isPaused());
+    // runcase settles first: it must not fail with "could not pause".
+    CHECK(raw.cmd("resume").rfind("ok", 0) == 0);
+    const std::string r = raw.cmd("runcase pc=300 sr=2700 a7=fff000 mem=fff000:0000021e return");
+    CHECK(r.rfind("ok reason=return", 0) == 0);
+    w.emu.host()->setHostMutations({});
+}
+
+// A host that cannot take the resume (IDA busy, shutting down) must get an
+// error back, never a resume behind its back.
+TEST(bridge_never_resumes_behind_a_host_that_declined)
+{
+    Wired w(38);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(38)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+
+    EmuHost::HostMutations hm;
+    hm.resume = [] { return false; };
+    w.emu.host()->setHostMutations(hm);
+    CHECK(raw.cmd("resume").rfind("err", 0) == 0);
+    CHECK(raw.cmd("frameadv 1").rfind("err", 0) == 0);
+    CHECK(raw.cmd("stepi").rfind("err", 0) == 0);
+    CHECK(w.emu.backend()->isPaused());
+    w.emu.host()->setHostMutations({});
+}
+
+// ---------------------------------------------------------------------------
+// The IDA plugin's run-control glue, against the real emulator, with IDA's main
+// thread modelled: requests posted to it (the continue) and events it polls run
+// only when the test "frees" it, as when a headless script stops pumping.
+// ---------------------------------------------------------------------------
+namespace {
+struct FakeIda {
+    HostRunSync<DebugEvent> sync;
+    IDebugBackend* be;
+    std::mutex mx;
+    std::vector<std::function<void()>> mainQueue;   // execute_sync NOWAIT
+    bool suspended = false;                          // DSTATE_SUSP
+    uint32_t pc = 0;                                 // where IDA believes it stopped
+    int sink = -1;
+    EmuHost* host;
+
+    explicit FakeIda(EmuHost* h) : be(h->backend()), host(h)
+    {
+        sync.setPostContinue([this] { postContinue(); });
+        sink = h->addEventSink([this](const DebugEvent& e) {
+            if (e.type == DebugEvent::Type::Paused) sync.pushStop(e);
+        });
+        EmuHost::HostMutations hm;
+        hm.resume = [this] { sync.run([this] { be->resume(); }); return true; };
+        h->setHostMutations(hm);
+    }
+    ~FakeIda() { host->setHostMutations({}); host->removeEventSink(sink); }
+
+    void postContinue()                              // post_continue()
+    {
+        std::lock_guard<std::mutex> lk(mx);
+        mainQueue.push_back([this] { if (sync.continueWanted() && suspended) idaContinue(); });
+    }
+    void idaContinue()                               // continue_process -> ev_resume
+    {
+        suspended = false;
+        if (sync.releaseHold()) be->resume();
+    }
+    // IDA's main thread gets a turn: posted requests, then event processing.
+    void freeMainThread()
+    {
+        std::vector<std::function<void()>> q;
+        { std::lock_guard<std::mutex> lk(mx); q.swap(mainQueue); }
+        for (auto& f : q) f();
+        DebugEvent e; bool more = true;
+        while (!suspended && sync.retrieve(&e, &more)) {
+            if (e.type != DebugEvent::Type::Paused) continue;
+            suspended = true;
+            pc = e.pc & 0xFFFFFF;
+            if (sync.continueWanted()) postContinue();   // dbg_suspend_process
+        }
+    }
+};
+}
+
+TEST(bridge_never_waits_for_a_busy_host_and_the_host_catches_up_without_stale_stops)
+{
+    Wired w(39);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(39)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    FakeIda ida(w.emu.host());
+
+    // Bring IDA to a stop it holds.
+    REQUIRE(raw.cmd("resume").rfind("ok", 0) == 0);
+    REQUIRE(raw.cmd("pause") == "ok");
+    REQUIRE(raw.cmd("wait 3000").rfind("ok paused", 0) == 0);
+    ida.freeMainThread();
+    REQUIRE(ida.suspended);
+
+    // IDA's main thread is now busy. Every run-control command must still
+    // answer at once, and the machine must do what it was told.
+    auto timed = [&](const std::string& c) {
+        const auto t0 = std::chrono::steady_clock::now();
+        const std::string r = raw.cmd(c);
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - t0).count();
+        CHECK(ms < 1500);
+        return r;
+    };
+    for (int i = 0; i < 20; ++i) {
+        CHECK(timed("frameadv 1") == "ok");
+        CHECK(timed("wait 3000").rfind("ok paused", 0) == 0);
+        CHECK(timed("stepi") == "ok");
+        CHECK(timed("wait 3000").rfind("ok paused", 0) == 0);
+        CHECK(timed("stepframe 1").rfind("ok", 0) == 0);
+        CHECK(timed("resume").rfind("ok", 0) == 0);
+        CHECK(timed("pause") == "ok");
+        CHECK(timed("wait 3000").rfind("ok paused", 0) == 0);
+        CHECK(timed("runcase pc=300 sr=2700 a7=fff000 mem=fff000:0000021e return").rfind("ok reason=return", 0) == 0);
+        const std::string hang = timed("runcase pc=220 sr=2700 a7=fff000 mem=fff000:0000021e return timeout=50");
+        if (hang.find(" timeout=1") == std::string::npos) std::printf("    hang reply: %s\n", hang.substr(0, 160).c_str());
+        CHECK(hang.find(" timeout=1") != std::string::npos);
+        CHECK(w.emu.backend()->isPaused());
+    }
+    // IDA is still suspended where it was (it could not look), with exactly one
+    // continue waiting for it.
+    CHECK(ida.suspended);
+    { std::lock_guard<std::mutex> lk(ida.mx); CHECK_EQ(ida.mainQueue.size(), size_t(1)); }
+
+    // Its main thread frees up: it continues, finds the machine already moved
+    // on (and does not run it from there), and suspends at the current stop.
+    const uint32_t emuPc = w.emu.backend()->getM68kRegs().pc & 0xFFFFFF;
+    ida.freeMainThread();
+    CHECK(ida.suspended);
+    CHECK_EQ(ida.pc, emuPc);
+    CHECK(w.emu.backend()->isPaused());
+
+    // And IDA's own run control still works from there.
+    ida.idaContinue();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    CHECK(!w.emu.backend()->isPaused());
+    w.emu.backend()->pause();                        // suspend_process -> ev_request_pause
+    REQUIRE(raw.cmd("wait 3000").rfind("ok paused", 0) == 0);
+    // The stop reaches the bridge's and IDA's sinks one after the other.
+    for (int i = 0; i < 200 && !ida.suspended; ++i) {
+        ida.freeMainThread();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(ida.suspended);
+    CHECK_EQ(ida.pc, w.emu.backend()->getM68kRegs().pc & 0xFFFFFF);
+}
+
+// ---------------------------------------------------------------------------
+// Stale stop requests: a pause, step or frame-end request that another stop
+// overtook (or that was made on a machine already paused) must not stop some
+// later, unrelated run.
+// ---------------------------------------------------------------------------
+TEST(stale_pause_on_a_paused_machine_arms_nothing)
+{
+    Wired w(40);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(40)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    REQUIRE(raw.cmd("pause") == "ok");                   // already paused
+    REQUIRE(raw.cmd("pause") == "ok");
+    const std::string r = raw.cmd("runcase pc=300 sr=2700 a7=fff000 mem=fff000:0000021e return");
+    CHECK(r.rfind("ok reason=return", 0) == 0);
+    const std::string t = raw.cmd("runto instr=20");
+    CHECK(t == "ok");
+    const std::string ws = raw.cmd("wait 3000");
+    if (ws.find(" reason=budget") == std::string::npos) std::printf("    wait: %s\n", ws.c_str());
+    CHECK(ws.find(" reason=budget") != std::string::npos);
+}
+
+TEST(stale_step_cut_short_by_a_watchpoint_leaves_nothing_armed)
+{
+    Wired w(41);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(41)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    M68kRegs r = w.emu.backend()->getM68kRegs();
+    r.pc = kDataEntry; r.sr = 0x2700; r.a[7] = kInitSp;
+    w.emu.backend()->setM68kRegs(r);
+    const std::string add = raw.cmd("bpadd w ff4276");
+    REQUIRE(add.rfind("ok ", 0) == 0);
+    REQUIRE(raw.cmd("stepi") == "ok");                   // the write trips the watchpoint
+    REQUIRE(raw.cmd("wait 3000").find(" reason=watchpoint") != std::string::npos);
+    REQUIRE(raw.cmd("bpdel " + add.substr(3)) == "ok");
+    REQUIRE(raw.cmd("runto instr=5") == "ok");
+    CHECK(raw.cmd("wait 3000").find(" reason=budget") != std::string::npos);
+}
+
+TEST(stale_frame_advance_cut_short_is_dropped_by_the_next_run)
+{
+    Wired w(42);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(42)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    const std::string add = raw.cmd("bpadd x 300");
+    REQUIRE(add.rfind("ok ", 0) == 0);
+    REQUIRE(raw.cmd("frameadv 5") == "ok");              // a breakpoint comes first
+    REQUIRE(raw.cmd("wait 3000").find(" reason=breakpoint") != std::string::npos);
+    REQUIRE(raw.cmd("bpdel " + add.substr(3)) == "ok");
+    // A run-to command starts afresh: the advance's remaining frames are gone.
+    const std::string c = raw.cmd("runcase pc=218 sr=2700 a7=fff000 instr=200000 timeout=5000");
+    CHECK(c.rfind("ok reason=budget", 0) == 0);
+    // ...while a plain resume after the breakpoint still finishes an advance.
+    const std::string add2 = raw.cmd("bpadd x 300");
+    REQUIRE(raw.cmd("frameadv 3") == "ok");
+    const std::string w2 = raw.cmd("wait 3000");
+    if (w2.find(" reason=breakpoint") == std::string::npos) std::printf("    wait: %s\n", w2.c_str());
+    REQUIRE(w2.find(" reason=breakpoint") != std::string::npos);
+    REQUIRE(raw.cmd("bpdel " + add2.substr(3)) == "ok");
+    REQUIRE(raw.cmd("resume").rfind("ok", 0) == 0);
+    CHECK(raw.cmd("wait 3000").find(" reason=frame") != std::string::npos);
+}
+
+TEST(stale_frame_boundary_request_overtaken_by_a_breakpoint_is_dropped)
+{
+    Wired w(43);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(43)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    const std::string add = raw.cmd("bpadd x 300");
+    REQUIRE(add.rfind("ok ", 0) == 0);
+    w.emu.gpgx()->requestFramePause();                   // as runcase state= does
+    REQUIRE(raw.cmd("resume").rfind("ok", 0) == 0);
+    REQUIRE(raw.cmd("wait 3000").find(" reason=breakpoint") != std::string::npos);
+    REQUIRE(raw.cmd("bpdel " + add.substr(3)) == "ok");
+    const std::string c = raw.cmd("runcase pc=218 sr=2700 a7=fff000 instr=200000 timeout=5000");
+    CHECK(c.rfind("ok reason=budget", 0) == 0);
 }
