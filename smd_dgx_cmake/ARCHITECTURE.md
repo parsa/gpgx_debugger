@@ -169,6 +169,31 @@ cmake --build ../builds/x64-release
 `bplist` с `enabled=0`. Id освобождают только удаление (в IDA, `bpdel`,
 `bpclear`) и новый процесс.
 
+**Причина каждой остановки.** К прежним полям ответа `wait` (и к `status`,
+пока стоим) дописывается `reason=<имя>` и то, что к ней относится:
+`breakpoint`, `watchpoint` (`access=read|write space= addr= size= value=`),
+`step`, `pause`, `exception` (`vector= name= fault_pc= frame_pc= sr=` и для
+address/bus error `access= addr=`), `halted` (двойная ошибка), `stopped`
+(STOP или ожидание шины), `frame`, `return`, `address`, `budget`. В `events`
+это шестое поле, пробелы заменены на `;`. Старые поля не менялись.
+
+Остановленный или «застрявший» 68000 не выполняет инструкций, и пауза раньше
+не доходила до хука. Теперь хост доставляет её между кадрами, если за кадр не
+выполнилось ни одной инструкции (`halted`/`stopped`). Запись PC перезапускает
+такой CPU и сбрасывает незавершённый кадр bus/address error.
+
+| Команда | Форма |
+|---|---|
+| `catch` | `[none\|faults\|all\|<hex-маска>]` — какие исключения останавливают; сообщаются все (`exception` в `events`) |
+| `runto` | `[return\|<hex-адрес>] [instr=N] [frames=N]` — resume с пределами |
+| `runcase` | `pc= [state=] [d0..a7 sr=] [ram=] [mem=<адрес>:<hex>] (return\|until=\|instr=\|frames=) [log=] [logcap=] [timeout=]` — один прогон: ответ = причина, регистры, `frames=`, `diff=` RAM, `log=` |
+| `log` | `on [cap=N] [m68k\|z80\|vdp:start-end ...]`, `off`, `get [start] [count]` — журнал доступов с PC и значениями; выключен = одна relaxed-загрузка атомика на доступ |
+| `override` | `none`, `z80bus`, `vdp <маска> <значение>`, `io <адрес> <1\|2> <маска> <значение>` — подмена чтений I/O (не RAM/ROM); по умолчанию нет |
+
+В IDA то же доступно через IDC: `smd_dgx_stop()` (причина последней
+остановки), `smd_dgx_catch(spec)`, `smd_dgx_override(spec)`. Пойманное
+исключение приходит в IDA как EXCEPTION с кодом = вектор.
+
 `status` отдаёт `stops=` и `frames=` — монотонные счётчики. Без них цикл
 «resume, потом опрашивать до paused=1» неверен: опрос видит ту паузу, на
 которой вызывающий уже стоял, и решает, что случилась новая, — покадровый

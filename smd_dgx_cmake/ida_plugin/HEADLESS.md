@@ -77,6 +77,18 @@ A subsequent regression removed caller-side invalidation and reproduced stale SP
 
 Latest verified MCP worker: **`e32b439c32dd`** on `.setup/runtime/headless/Pocahontas-aliases.i64`, 930 functions preserved, paused at `$200` with original stack banks restored. Evidence `.setup/runtime/headless/mcp-alias-write.json` explicitly records `manual_invalidation: false`. Native/GUI regression logs: `.setup/logs/alias-raw.log`, `.setup/logs/alias-gui.log`; before-fix failure: `.setup/logs/alias-red.log`. Older working instances retain their plugin mappings and were left untouched. A temporary prototype worker was closed before verifying the final main-thread-marshalled implementation.
 
+## Stop reasons, exceptions and overrides from scripts
+
+IDA's events carry no cause, so the plugin registers IDC functions (callable from IDAPython with `ida_expr.eval_idc_expr`):
+
+- `smd_dgx_stop()` describes the last stop: `reason=<breakpoint|watchpoint|step|pause|exception|halted|stopped|frame|return|address|budget>` plus its details (watchpoint access, exception vector/fault PC/SR/access) and `pc= cpu= bp=`.
+- `smd_dgx_catch("none|faults|all|<hex mask>")` chooses which 68000 exception vectors stop. A caught exception arrives as an IDA `EXCEPTION` event whose code is the vector, with the same description as its info. The exceptions are pre-defined with break+log flags, so no dialog appears.
+- `smd_dgx_override("none|z80bus|vdp <mask> <value>|io <addr> <1|2> <mask> <value>")` sets hardware-wait overrides (off by default).
+
+A halted (double fault) or STOPped 68000 now suspends: `suspend_process()` lands within a frame and `smd_dgx_stop()` says `halted` or `stopped`. Setting PC restarts such a CPU.
+
+Headless IDA processes debugger events only inside a wait. A script that lets a bridge client drive run control (for example `runcase`) must keep calling `wait_for_next_event(WFNE_ANY, 0)` meanwhile, or IDA never sees the stops.
+
 ## What was fixed
 
 Previously the macOS plugin was linked with `-undefined dynamic_lookup`, relying on GUI IDA to preload its namespaced Qt libraries. Headless IDA did not preload Qt, so its loader rejected the plugin with:
