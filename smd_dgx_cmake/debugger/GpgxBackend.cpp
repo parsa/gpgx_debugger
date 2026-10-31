@@ -567,7 +567,19 @@ void GpgxBackend::serviceStoppedCpu()
     firePause(m68k_get_reg(M68K_REG_PC), Cpu::M68K, -1,
               (stopped & kStopLevelHalt) ? StopReason::Halted : StopReason::Stopped);
 }
-void GpgxBackend::resume()  { beginRun(); paused_.store(false); if (resumeCb_) resumeCb_(); }
+// Every transition to running happens under reqMx_, like firePause's stop
+// publication: a resume can then never fall between a stop taking its run
+// epoch and the machine being marked paused (which would leave it paused at a
+// stop a host discards as already run past).
+void GpgxBackend::resume()
+{
+    {
+        std::lock_guard<std::mutex> lk(reqMx_);
+        beginRun();
+        paused_.store(false);
+    }
+    if (resumeCb_) resumeCb_();
+}
 void GpgxBackend::cancelRunRequests()
 {
     pauseReason_.store(0);
@@ -608,6 +620,7 @@ bool GpgxBackend::stepIfEpoch(Cpu cpu, bool over, uint64_t epoch)
 
 void GpgxBackend::stepInto(Cpu cpu)
 {
+    std::lock_guard<std::mutex> lk(reqMx_);
     armStepInto(cpu);
     beginRun();
     paused_.store(false);
@@ -1025,6 +1038,7 @@ void GpgxBackend::firePause(uint32_t pc, Cpu cpu, int bpId, StopReason why)
         // armed, one would stop some later, unrelated run.
         std::lock_guard<std::mutex> lk(reqMx_);
         stopEpoch_.store(runEpoch_.load());
+        if (stopSectionHook_) stopSectionHook_();
         paused_.store(true);
         cancelRunRequests();
     }

@@ -1613,3 +1613,44 @@ TEST(a_host_continue_racing_a_bridge_run_does_not_run_past_the_newer_stop)
     CHECK(ida.suspended);                                 // and IDA learns of it
     CHECK_EQ(ida.pc, w.emu.backend()->getM68kRegs().pc & 0xFFFFFF);
 }
+
+// A bridge resume landing while the emulator is publishing a stop (epoch taken,
+// not yet marked paused) must not leave it paused at a stop IDA discards.
+TEST(a_resume_inside_stop_publication_never_hides_the_stop)
+{
+    Wired w(51);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(51)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    FakeIda ida(w.emu.host());
+    REQUIRE(raw.cmd("resume").rfind("ok", 0) == 0);
+    std::thread resumer;
+    std::atomic<bool> once{false};
+    w.emu.gpgx()->setStopSectionHookForTest([&] {
+        if (once.exchange(true)) return;
+        // A bridge client's resume, from its own thread, right now.
+        resumer = std::thread([&] { ida.host->hostMutations().resume(); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    });
+    w.emu.backend()->pause();
+    for (int i = 0; i < 200 && !once.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    REQUIRE(once.load());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (resumer.joinable()) resumer.join();
+    w.emu.gpgx()->setStopSectionHookForTest(nullptr);
+    for (int i = 0; i < 40; ++i) {
+        ida.freeMainThread();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    // Either the machine runs (the resume came after the stop) or it is paused
+    // and IDA has the stop. Never paused with IDA still believing it runs.
+    if (w.emu.backend()->isPaused()) {
+        CHECK(ida.suspended);
+        CHECK_EQ(ida.pc, w.emu.backend()->getM68kRegs().pc & 0xFFFFFF);
+    } else {
+        CHECK(!ida.suspended);
+    }
+    CHECK(raw.cmd("pause") == "ok");
+    CHECK(raw.cmd("wait 3000").rfind("ok paused", 0) == 0);
+}

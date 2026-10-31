@@ -86,6 +86,9 @@ public:
     // beginRun): a host that decided to resume must not run the machine past
     // a stop a bridge client reached meanwhile. False: nothing done.
     bool resumeIfEpoch(uint64_t epoch);
+    // Test seam: runs inside a stop's publication (epoch taken, not yet
+    // paused), on the emulation thread, to test interleavings there.
+    void setStopSectionHookForTest(std::function<void()> f) { stopSectionHook_ = std::move(f); }
     bool stepIfEpoch(Cpu cpu, bool over, uint64_t epoch);
     uint64_t runEpoch() const { return runEpoch_.load(); }
     uint64_t lastStopEpoch() const { return stopEpoch_.load(); }
@@ -202,6 +205,7 @@ private:
     std::atomic<uint8_t> pauseReason_ {0}; // pending pause request (StopReason), 0 = none
     std::atomic<uint64_t> runEpoch_ {1};
     std::atomic<uint64_t> stopEpoch_ {0};
+    std::function<void()> stopSectionHook_;
     // Orders a pause request against the machine stopping (see requestPause).
     std::mutex reqMx_;
     std::atomic<bool> stepInto_ {false};
