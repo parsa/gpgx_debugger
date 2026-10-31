@@ -982,6 +982,7 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
                 }
                 r.pc = pc & 0xFFFFFF;
                 g->setM68kRegs(r);
+                g->setM68kPcExact(r.pc);    // no high bits left over from the machine's PC
                 if (!image.empty()) g->writeMemory(0xFF0000, image.data(), uint32_t(image.size()));
                 for (const auto& w : writes) g->writeMemory(w.addr, w.data.data(), uint32_t(w.data.size()));
                 before = g->readMemory(0xFF0000, 0x10000);

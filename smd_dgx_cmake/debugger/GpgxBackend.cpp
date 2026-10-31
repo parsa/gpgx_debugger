@@ -97,7 +97,10 @@ M68kRegs GpgxBackend::getM68kRegs()
     M68kRegs r{};
     for (int i = 0; i < 8; ++i) r.d[i] = m68k_get_reg(static_cast<m68k_register_t>(M68K_REG_D0 + i));
     for (int i = 0; i < 8; ++i) r.a[i] = m68k_get_reg(static_cast<m68k_register_t>(M68K_REG_A0 + i));
-    r.pc  = m68k_get_reg(M68K_REG_PC);
+    // The 68000's address bus is 24 bits: a jump through an address with high
+    // bits set leaves them in the core's PC, but the CPU runs at (and the
+    // debugger reports) the 24-bit address. setM68kRegs keeps the core's bits.
+    r.pc  = m68k_get_reg(M68K_REG_PC) & 0xFFFFFF;
     r.sr  = m68k_get_reg(M68K_REG_SR);
     r.usp = m68k_get_reg(M68K_REG_USP);
     r.isp = m68k_get_reg(M68K_REG_ISP);
@@ -119,17 +122,25 @@ void GpgxBackend::setM68kRegs(const M68kRegs& r)
     // Moving PC restarts the CPU there. A halt (double fault) or a STOP would
     // otherwise outlive it and the CPU would never run again; likewise an
     // unfinished bus/address-error frame would turn the next fault into a halt.
-    if ((r.pc & 0xFFFFFF) != (m68k_get_reg(M68K_REG_PC) & 0xFFFFFF)) {
+    // A PC whose 24-bit address is unchanged is not written at all: the core's
+    // high bits (which getM68kRegs does not report) stay as they are.
+    const bool pcMoved = (r.pc & 0xFFFFFF) != (m68k_get_reg(M68K_REG_PC) & 0xFFFFFF);
+    if (pcMoved) {
         m68k.stopped &= ~(kStopLevelStop | kStopLevelHalt);
         m68k.run_mode = kRunModeNormal;
         m68k.instr_mode = kInstructionYes;
     }
     for (int i = 0; i < 8; ++i) m68k_set_reg(static_cast<m68k_register_t>(M68K_REG_D0 + i), r.d[i]);
     for (int i = 0; i < 8; ++i) m68k_set_reg(static_cast<m68k_register_t>(M68K_REG_A0 + i), r.a[i]);
-    m68k_set_reg(M68K_REG_PC,  r.pc);
+    if (pcMoved) m68k_set_reg(M68K_REG_PC, r.pc);
     m68k_set_reg(M68K_REG_SR,  r.sr);
     m68k_set_reg(M68K_REG_USP, usp);
     m68k_set_reg(M68K_REG_ISP, isp);
+}
+
+void GpgxBackend::setM68kPcExact(uint32_t pc)
+{
+    m68k_set_reg(M68K_REG_PC, pc);
 }
 
 Z80Regs GpgxBackend::getZ80Regs()
@@ -564,7 +575,7 @@ void GpgxBackend::serviceStoppedCpu()
     standingOnNext_ = true;
     stopInInstr_ = false;
     stopMidInstr_ = false;
-    firePause(m68k_get_reg(M68K_REG_PC), Cpu::M68K, -1,
+    firePause(m68k_get_reg(M68K_REG_PC) & 0xFFFFFF, Cpu::M68K, -1,
               (stopped & kStopLevelHalt) ? StopReason::Halted : StopReason::Stopped);
 }
 // Every transition to running happens under reqMx_, like firePause's stop
@@ -645,7 +656,7 @@ void GpgxBackend::armStepOverLocked(Cpu cpu)
 {
     if (cpu == Cpu::Z80) { armStepOverZ80(); return; }
 
-    uint32_t pc = m68k_get_reg(M68K_REG_PC);
+    uint32_t pc = m68k_get_reg(M68K_REG_PC) & 0xFFFFFF;   // compared with hook addresses
     const cpu_memory_map* map = &m68k.memory_map[(pc >> 16) & 0xFF];
     uint16_t opc = 0;
     // storage is word-swapped on LE hosts: logical hi byte lives at addr^1
@@ -727,6 +738,9 @@ bool GpgxBackend::loadRom(const char* path)
 void GpgxBackend::onCpuHook(int type, int width, uint32_t addr, uint32_t value)
 {
     if (type & HOOK_M68K_E) {
+        // The core passes its raw PC, which can carry high bits the 68000
+        // ignores: match, track and report the 24-bit address it runs at.
+        addr &= 0xFFFFFF;
         // codemap: record predecessor of every executed ROM/RAM address
         if (lastPc_ && addr && addr < MAXROMSIZE) {
             std::lock_guard<std::mutex> lk(codemapMutex_);
@@ -848,7 +862,7 @@ void GpgxBackend::serviceFramePause()
     stopMidInstr_ = false;
     standingOnNext_ = true;
     atFrameBoundary_.store(true);
-    firePause(m68k_get_reg(M68K_REG_PC), Cpu::M68K, -1, StopReason::FrameAdvance);
+    firePause(m68k_get_reg(M68K_REG_PC) & 0xFFFFFF, Cpu::M68K, -1, StopReason::FrameAdvance);
     atFrameBoundary_.store(false);
 }
 

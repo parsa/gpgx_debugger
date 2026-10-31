@@ -20,6 +20,10 @@
 #include <condition_variable>
 #include <thread>
 
+extern "C" {
+#include "shared.h"                 // m68k_get_reg: the core's own PC, high bits included
+}
+
 using namespace synth;
 
 namespace {
@@ -1832,4 +1836,102 @@ TEST(runcase_reaches_the_frame_boundary_through_repeated_stops)
     const std::string r3 = raw.cmd("runcase state=" + path + " " + trapLoop);
     CHECK(r3.rfind("ok reason=breakpoint pc=610 ", 0) == 0);
     std::remove(path.c_str());
+}
+
+// The 68000 has a 24-bit address bus: a jump through an address with high bits
+// set (a game crashing through a bad pointer) leaves them in the core's PC
+// while the CPU runs at the 24-bit address. Everything the debugger reports
+// gives that address; the core's PC itself keeps its bits.
+TEST(m68k_pc_is_reported_as_24_bits)
+{
+    Wired w(57);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(57)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    // Every pc= / *_pc= value in a reply is a 24-bit address.
+    auto pcs24 = [](const std::string& reply) {
+        bool any = false;
+        size_t at = 0;
+        while ((at = reply.find("pc=", at)) != std::string::npos) {
+            const size_t start = at + 3;
+            at = start;
+            if (start >= 4 && reply.compare(start - 4, 4, " pc=") != 0 && reply[start - 4] != '_') continue;
+            any = true;
+            if (std::strtoull(reply.c_str() + start, nullptr, 16) > 0xFFFFFF) return false;
+        }
+        return any;
+    };
+    auto pcOf = [](const std::string& reply) {
+        const size_t at = reply.find(" pc=");
+        return at == std::string::npos ? ~0ull : std::strtoull(reply.c_str() + at + 4, nullptr, 16);
+    };
+    auto corePc = [&] {
+        uint32_t pc = 0;
+        w.emu.host()->invoke([&] { pc = m68k_get_reg(M68K_REG_PC); });
+        return pc;
+    };
+    const std::string at = " sr=2700 a7=fff000 mem=ff0100:4ed0";       // jmp (a0)
+    auto checked = [&](const char* what, const std::string& reply) {
+        const bool ok = pcs24(reply);
+        if (!ok) std::printf("    %s: %s\n", what, reply.substr(0, 160).c_str());
+        CHECK(ok);
+        return reply;
+    };
+
+    // Run limit (frames; delivered as a pause on the next instruction).
+    std::string r = checked("runcase frames", raw.cmd("runcase pc=ff0100 a0=40000600" + at + " frames=1"));
+    CHECK(r.rfind("ok reason=budget ", 0) == 0);
+    CHECK((corePc() >> 24) == 0x40);                    // the core keeps its bits
+    checked("regs68k", raw.cmd("regs68k"));
+    checked("status", raw.cmd("status"));
+    // Frame stop, step, pause.
+    REQUIRE(raw.cmd("frameadv 1") == "ok");
+    checked("frame stop", raw.cmd("wait 3000"));
+    REQUIRE(raw.cmd("stepi") == "ok");
+    checked("step stop", raw.cmd("wait 3000"));
+    REQUIRE(raw.cmd("resume").rfind("ok", 0) == 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    REQUIRE(raw.cmd("pause") == "ok");
+    checked("pause stop", raw.cmd("wait 3000"));
+    // Writing registers back leaves the core's PC as it was.
+    REQUIRE((corePc() >> 24) == 0x40);
+    const uint32_t before = corePc();
+    CHECK(raw.cmd("wreg68k d0=5") == "ok");
+    CHECK_EQ(corePc(), before);
+    CHECK(raw.cmd("wreg68k pc=" + [&] { char b[16]; std::snprintf(b, sizeof b, "%x", before & 0xFFFFFF); return std::string(b); }()) == "ok");
+    CHECK_EQ(corePc(), before);
+
+    // A breakpoint and an address limit at the 24-bit address the CPU runs at.
+    const std::string add = raw.cmd("bpadd x 602");
+    REQUIRE(add.rfind("ok ", 0) == 0);
+    r = checked("breakpoint", raw.cmd("runcase pc=ff0100 a0=40000600" + at + " instr=5000"));
+    CHECK(r.rfind("ok reason=breakpoint ", 0) == 0);
+    CHECK_EQ(pcOf(r), 0x602ull);
+    REQUIRE(raw.cmd("bpdel " + add.substr(3)) == "ok");
+    r = checked("until", raw.cmd("runcase pc=ff0100 a0=40000600" + at + " until=602"));
+    CHECK(r.rfind("ok reason=address ", 0) == 0);
+
+    // STOP and a double fault reached at a high-bit PC.
+    r = checked("stopped", raw.cmd("runcase pc=ff0100 a0=40000500" + at + " instr=100000"));
+    CHECK(r.rfind("ok reason=stopped ", 0) == 0);
+    r = checked("halted", raw.cmd("runcase pc=ff0100 a0=40000510" + at + " instr=100000"));
+    CHECK(r.rfind("ok reason=halted ", 0) == 0);
+
+    // A caught exception and a watchpoint hit at a high-bit PC.
+    raw.cmd("catch faults");
+    r = checked("exception", raw.cmd("runcase pc=ff0100 a0=40000520" + at + " instr=1000"));
+    CHECK(r.rfind("ok reason=exception ", 0) == 0);
+    raw.cmd("catch none");
+    const std::string wp = raw.cmd("bpadd w ff4276 ff4279");
+    REQUIRE(wp.rfind("ok ", 0) == 0);
+    r = checked("watchpoint", raw.cmd("runcase pc=ff0100 a0=40000240" + at + " instr=1000"));
+    CHECK(r.rfind("ok reason=watchpoint ", 0) == 0);
+    REQUIRE(raw.cmd("bpdel " + wp.substr(3)) == "ok");
+
+    // runcase starts from exactly its pc=, whatever high bits the machine's PC had.
+    raw.cmd("runcase pc=ff0100 a0=40000600" + at + " instr=5");
+    REQUIRE((corePc() >> 24) == 0x40);
+    raw.cmd("runcase pc=600 sr=2700 a7=fff000 instr=3");
+    CHECK_EQ(corePc() >> 24, 0u);
 }

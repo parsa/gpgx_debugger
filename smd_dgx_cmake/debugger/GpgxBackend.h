@@ -33,6 +33,9 @@ public:
 
     M68kRegs   getM68kRegs() override;
     void       setM68kRegs(const M68kRegs&) override;
+    // Set the core's PC to exactly this value, high bits included (runcase:
+    // a case starts from a clean PC whatever the previous one left there).
+    void       setM68kPcExact(uint32_t pc);
     Z80Regs    getZ80Regs() override;
     void       setZ80Regs(const Z80Regs&) override;
     VdpState   getVdpState() override;

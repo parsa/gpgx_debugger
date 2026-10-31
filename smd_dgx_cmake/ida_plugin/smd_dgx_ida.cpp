@@ -306,7 +306,7 @@ void on_emu_event(const DebugEvent& ev)
                 ida_ev.set_eid(PROCESS_SUSPENDED);
             }
         }
-        ida_ev.ea = ev.pc;
+        ida_ev.ea = ev.pc & 0xFFFFFF;           // a 68000 PC is a 24-bit address
         g_sync.pushStop(ida_ev, ev.runEpoch);
         break;
     case DebugEvent::Type::Stopped:
