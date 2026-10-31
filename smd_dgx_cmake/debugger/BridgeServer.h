@@ -95,4 +95,5 @@ private:
     std::vector<std::thread>              clientThreads_;
     uint64_t                              nextSeq_ = 1;
     std::string                           lastStopDetail_;   // guarded by clientsMx_
+    uint64_t                              lastStopSeq_ = 0;  // stopSeq of the last Paused event seen; guarded by clientsMx_
 };

@@ -5,6 +5,9 @@
 #include "test_harness.h"
 #include "fixture.h"
 
+#include <chrono>
+#include <thread>
+
 using namespace synth;
 
 namespace {
@@ -76,6 +79,29 @@ TEST(run_to_address_and_instruction_budget)
     REQUIRE(runAndWait(e, budget));
     CHECK(e.pauseReason() == StopReason::Budget);
     CHECK_EQ(e.backend()->getM68kRegs().pc, kSubRts);   // two retired, standing on the third
+}
+
+// After a stop delivered between frames (here: a halted CPU), the CPU stands
+// on an instruction no hook has counted yet. The budget must still mean
+// "instructions retired from here".
+TEST(instruction_budget_after_a_between_frame_stop)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+
+    e.parkM68kAt(kHaltEntry);
+    e.backend()->resume();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    REQUIRE(e.pauseAndWait(1500));
+    REQUIRE(e.pauseReason() == StopReason::Halted);
+
+    e.parkM68kAt(kJsr);
+    RunLimits budget;
+    budget.maxInstructions = 2;                          // jsr, nop
+    REQUIRE(runAndWait(e, budget));
+    CHECK(e.pauseReason() == StopReason::Budget);
+    CHECK_EQ(e.backend()->getM68kRegs().pc, kSubRts);
 }
 
 TEST(frame_budget_stops_after_that_many_frames)

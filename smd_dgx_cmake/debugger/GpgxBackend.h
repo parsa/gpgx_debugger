@@ -217,6 +217,7 @@ private:
 
     mutable std::mutex        ovrMx_;
     std::vector<ReadOverride> overrides_;   // guarded by ovrMx_
+    std::atomic<bool>         ovrActive_ {false};
 
     std::atomic<bool>     logOn_ {false};
     mutable std::mutex    logMx_;

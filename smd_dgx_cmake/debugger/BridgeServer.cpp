@@ -197,6 +197,9 @@ bool BridgeServer::start(unsigned short port)
 
     listenFd_ = static_cast<long long>(fd);
     running_.store(true);
+    // Stops from before this bridge existed count as seen (runcase waits for
+    // the bridge to have seen the stop it is standing on).
+    { std::lock_guard<std::mutex> lk(clientsMx_); lastStopSeq_ = host_->stopCount(); }
     sinkId_ = host_->addEventSink([this](const DebugEvent& ev) { onEmuEvent(&ev); });
     thread_   = std::thread(&BridgeServer::serve, this);
     return true;
@@ -296,7 +299,7 @@ void BridgeServer::onEmuEvent(const void* evp)
     const std::string detail = describeStop(ev);
     std::lock_guard<std::mutex> lk(clientsMx_);
     const uint64_t seq = nextSeq_++;
-    if (ev.type == DebugEvent::Type::Paused) lastStopDetail_ = detail;
+    if (ev.type == DebugEvent::Type::Paused) { lastStopDetail_ = detail; lastStopSeq_ = ev.stopSeq; }
     for (auto& c : clients_) {
         if (c->events.size() >= 256) { c->events.pop_front(); ++c->dropped; }
         c->events.push_back(QueuedEvent{ seq, uint8_t(ev.type), uint8_t(ev.cpu), ev.pc, ev.bpId, detail });
@@ -840,6 +843,21 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
         if (!havePc || (!toReturn && !lim.any())) return kUsage;
 
         GpgxBackend* g = host_->gpgx();
+        auto seenStop = [this] { std::lock_guard<std::mutex> lk(clientsMx_); return lastStopSeq_; };
+        // Set the case up only on a paused machine, and only once this bridge
+        // has seen that pause's event (the host numbers stops before it emits
+        // them): otherwise the case could start, or its stop be confused with
+        // an older one, before the baseline below is taken.
+        auto settled = [&] { return be->isPaused() && seenStop() == host_->stopCount(); };
+        if (!be->isPaused()) {
+            const std::string p = handle("pause", client);
+            if (p.rfind("ok", 0) != 0) return p;
+        }
+        for (int i = 0; i < 2000 && !settled(); ++i) {
+            if (stopFlag_.load()) return "err stopping";
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if (!settled()) return "err could not pause";
         bool stateOk = true;
         std::vector<uint8_t> before;
         // Everything that touches the machine happens on the emulation thread.
@@ -866,20 +884,22 @@ std::string BridgeServer::handle(const std::string& line, Client& client)
             return "err emulator not running";
         if (!stateOk) return "err state io failed";
 
-        const uint64_t stops = host_->stopCount();
+        // The stop is this bridge's next Paused event: its description is
+        // stored under the same lock, so it cannot be the previous stop's.
+        const uint64_t seq0 = seenStop();
         const uint64_t frames0 = host_->frameCount();
         const std::string resumed = handle("resume", client);
         if (resumed.rfind("ok", 0) != 0) return resumed;
         bool timedOut = true;
         for (uint32_t waited = 0; waited < timeoutMs; ++waited) {
-            if (host_->stopCount() != stops) { timedOut = false; break; }
+            if (seenStop() != seq0) { timedOut = false; break; }
             if (stopFlag_.load()) return "err stopping";
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         if (timedOut) {
             g->disarmRun();
             handle("pause", client);
-            for (int i = 0; i < 2000 && host_->stopCount() == stops; ++i)
+            for (int i = 0; i < 2000 && seenStop() == seq0; ++i)
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         if (logOn) g->stopAccessLog();

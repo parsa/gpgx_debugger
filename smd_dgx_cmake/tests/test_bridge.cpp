@@ -718,6 +718,11 @@ TEST(bridge_runcase_runs_a_routine_to_its_return)
     CHECK(r.find(" a7=fff000 ") != std::string::npos);
     CHECK(r.find(" diff=0") != std::string::npos);                      // rts only reads
     CHECK(r.find(" log=-") != std::string::npos);                       // log not requested
+
+    // Started while the machine runs: runcase pauses first, then runs the case.
+    CHECK_STR(raw.cmd("resume"), "ok");
+    const std::string again = raw.cmd("runcase pc=300 a7=ffeffc sr=2700 mem=ffeffc:0000021e return");
+    CHECK(again.rfind("ok reason=return pc=21e ", 0) == 0);
 }
 
 TEST(bridge_runcase_reports_ram_diff_and_access_log)

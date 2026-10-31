@@ -46,7 +46,16 @@ static unsigned int readFilterShim(int width, unsigned int addr, unsigned int va
     return g_gpgxBackend ? g_gpgxBackend->filterRead(width, addr, value) : value;
 }
 
-GpgxBackend::GpgxBackend()  { g_gpgxBackend = this; set_cpu_hook(cpuHookShim); }
+// The read filter stays installed for the backend's lifetime: changing the
+// core's function pointer while the emulation thread reads through it would
+// be a race. With no overrides it returns the value untouched (one relaxed
+// load), and it only ever sees reads that go through an I/O handler.
+GpgxBackend::GpgxBackend()
+{
+    g_gpgxBackend = this;
+    set_cpu_hook(cpuHookShim);
+    set_cpu_read_filter(readFilterShim);
+}
 
 GpgxBackend::~GpgxBackend()
 {
@@ -647,9 +656,11 @@ void GpgxBackend::armRun(const RunLimits& lim)
     run_ = lim;
     run_.returnAddr &= 0xFFFFFF;
     if (run_.stopAddr >= 0) run_.stopAddr &= 0xFFFFFF;
-    // execCount_ already counts the instruction the CPU is standing on: the
-    // budget is instructions retired from here.
-    runStartExec_ = execCount_;
+    // Stopped inside an instruction hook, execCount_ already counts the
+    // instruction the CPU stands on. Stopped between frames (standingOnNext_),
+    // its hook has yet to run and will count it: start one later, so the
+    // budget is always instructions retired from here.
+    runStartExec_ = execCount_ + (standingOnNext_ ? 1 : 0);
     runFrames_ = 0;
     runActive_.store(lim.any());
 }
@@ -665,12 +676,9 @@ void GpgxBackend::onFrameEnd()
 
 void GpgxBackend::setReadOverrides(const std::vector<ReadOverride>& v)
 {
-    {
-        std::lock_guard<std::mutex> lk(ovrMx_);
-        overrides_ = v;
-    }
-    // No overrides, no filter: the core's read path is then untouched.
-    set_cpu_read_filter(v.empty() ? nullptr : readFilterShim);
+    std::lock_guard<std::mutex> lk(ovrMx_);
+    overrides_ = v;
+    ovrActive_.store(!v.empty());
 }
 
 std::vector<ReadOverride> GpgxBackend::readOverrides() const
@@ -681,6 +689,7 @@ std::vector<ReadOverride> GpgxBackend::readOverrides() const
 
 uint32_t GpgxBackend::filterRead(int width, uint32_t address, uint32_t value)
 {
+    if (!ovrActive_.load(std::memory_order_relaxed)) return value;
     std::lock_guard<std::mutex> lk(ovrMx_);
     for (const auto& o : overrides_)
         if (o.size == width && o.address == (address & 0xFFFFFF))
