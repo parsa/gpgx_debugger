@@ -783,3 +783,38 @@ TEST(pad_round_trips)
     e.backend()->setPad(0, 0);
     CHECK_EQ(e.backend()->getPad(0), 0u);
 }
+
+// The execute-breakpoint index (a bit per address) must follow every edit:
+// removing one of two overlapping breakpoints keeps the other armed, disabling
+// unarms, re-enabling and moving re-arm, clearing unarms everything.
+TEST(execute_breakpoint_index_follows_every_edit)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+    auto hitsAt = [&](uint32_t pc) {
+        const uint64_t s = e.pauseSeq();
+        e.backend()->resume();
+        if (!e.waitPause(s, 1000)) { e.pauseAndWait(); return false; }
+        return e.pauseReason() == StopReason::Breakpoint && (e.pausePc() & 0xFFFFFF) == pc;
+    };
+    Breakpoint a; a.type = BpType::PC; a.start = a.end = kSubEntry;            // 0x300
+    Breakpoint b; b.type = BpType::PC; b.start = kSubEntry - 0x10; b.end = kSubEntry + 0x10;
+    const int ida = e.backend()->addBreakpoint(a);
+    const int idb = e.backend()->addBreakpoint(b);
+    e.backend()->removeBreakpoint(idb);                 // a's bits must survive
+    CHECK(hitsAt(kSubEntry));
+    a.id = ida; a.enabled = false;
+    REQUIRE(e.backend()->updateBreakpoint(a));
+    CHECK(!hitsAt(kSubEntry));                          // disabled: runs through
+    a.enabled = true; a.start = a.end = kJsr;            // re-enabled, moved
+    REQUIRE(e.backend()->updateBreakpoint(a));
+    CHECK(hitsAt(kJsr));
+    CHECK(hitsAt(kJsr));                                // and again next time round
+    e.backend()->clearBreakpoints();
+    CHECK(!hitsAt(kJsr));
+    // A Z80 breakpoint at the same number never stops the 68000.
+    Breakpoint z; z.type = BpType::PC; z.cpu = Cpu::Z80; z.start = z.end = kJsr;
+    e.backend()->addBreakpoint(z);
+    CHECK(!hitsAt(kJsr) || e.pauseEvent().cpu == Cpu::Z80);
+}

@@ -435,24 +435,99 @@ int GpgxBackend::addBreakpoint(const Breakpoint& bp)
     std::lock_guard<std::mutex> lk(bpMutex_);
     Breakpoint b = bp; b.id = nextBpId_++;
     breakpoints_.push_back(b);
-    bpCount_.store(int(breakpoints_.size()), std::memory_order_relaxed);
+    markExec(b, true);
+    indexBreakpoints(nullptr);
     return b.id;
 }
 void GpgxBackend::removeBreakpoint(int id)
 {
     std::lock_guard<std::mutex> lk(bpMutex_);
-    breakpoints_.erase(std::remove_if(breakpoints_.begin(), breakpoints_.end(),
-        [id](const Breakpoint& b){ return b.id == id; }), breakpoints_.end());
-    bpCount_.store(int(breakpoints_.size()), std::memory_order_relaxed);
+    for (auto it = breakpoints_.begin(); it != breakpoints_.end(); ++it) {
+        if (it->id != id) continue;
+        const Breakpoint gone = *it;
+        breakpoints_.erase(it);
+        indexBreakpoints(&gone);
+        return;
+    }
 }
 bool GpgxBackend::updateBreakpoint(const Breakpoint& bp)
 {
     std::lock_guard<std::mutex> lk(bpMutex_);
     for (auto& b : breakpoints_)
-        if (b.id == bp.id) { b = bp; return true; }
+        if (b.id == bp.id) {
+            const Breakpoint old = b;
+            b = bp;
+            indexBreakpoints(&old);     // unmark the old range, re-mark what remains
+            markExec(b, true);
+            return true;
+        }
     return false;
 }
-void GpgxBackend::clearBreakpoints() { std::lock_guard<std::mutex> lk(bpMutex_); breakpoints_.clear(); bpCount_.store(0, std::memory_order_relaxed); }
+void GpgxBackend::clearBreakpoints()
+{
+    std::lock_guard<std::mutex> lk(bpMutex_);
+    for (const Breakpoint& b : breakpoints_) markExec(b, false);
+    breakpoints_.clear();
+    indexBreakpoints(nullptr);
+}
+
+// Set or clear the address bits an enabled execute breakpoint covers.
+void GpgxBackend::markExec(const Breakpoint& b, bool on)
+{
+    if (b.type != BpType::PC || b.is_vdp || (on && !b.enabled)) return;
+    const bool z80 = b.cpu == Cpu::Z80;
+    auto& map = z80 ? execZ80Map_ : exec68kMap_;
+    const uint32_t mask = z80 ? 0xFFFFu : 0xFFFFFFu;
+    if (!map) {
+        if (!on) return;
+        const size_t bytes = (size_t(mask) + 1) / 8;
+        map.reset(new std::atomic<uint8_t>[bytes]);
+        for (size_t i = 0; i < bytes; ++i) map[i].store(0, std::memory_order_relaxed);
+    }
+    if (b.end < b.start) return;
+    const uint32_t first = b.start & mask, last = std::min(b.end, mask);
+    for (uint32_t a = first; ; ++a) {
+        const uint8_t bit = uint8_t(1u << (a & 7));
+        if (on) map[a >> 3].fetch_or(bit, std::memory_order_relaxed);
+        else    map[a >> 3].fetch_and(uint8_t(~bit), std::memory_order_relaxed);
+        if (a == last) break;
+    }
+}
+
+// Recount by kind; after a removal (or the old version of an updated one),
+// clear its bits and re-mark the remaining breakpoints that overlap them.
+void GpgxBackend::indexBreakpoints(const Breakpoint* removed)
+{
+    if (removed && removed->type == BpType::PC && !removed->is_vdp) {
+        markExec(*removed, false);
+        for (const Breakpoint& b : breakpoints_)
+            if (b.cpu == removed->cpu && b.start <= removed->end && b.end >= removed->start)
+                markExec(b, true);
+    }
+    int e68 = 0, ez = 0, rw = 0;
+    for (const Breakpoint& b : breakpoints_) {
+        if (!b.enabled) continue;
+        if (b.type == BpType::PC && !b.is_vdp) (b.cpu == Cpu::Z80 ? ez : e68)++;
+        else ++rw;
+    }
+    exec68kCount_.store(e68);
+    execZ80Count_.store(ez);
+    rwCount_.store(rw);
+}
+
+bool GpgxBackend::execMayHit(Cpu cpu, uint32_t addr, int width) const
+{
+    const bool z80 = cpu == Cpu::Z80;
+    if ((z80 ? execZ80Count_ : exec68kCount_).load(std::memory_order_relaxed) == 0) return false;
+    const auto& map = z80 ? execZ80Map_ : exec68kMap_;
+    if (!map) return false;
+    const uint32_t mask = z80 ? 0xFFFFu : 0xFFFFFFu;
+    for (int i = 0; i < (width > 0 ? width : 1); ++i) {
+        const uint32_t a = (addr + uint32_t(i)) & mask;
+        if (map[a >> 3].load(std::memory_order_relaxed) & (1u << (a & 7))) return true;
+    }
+    return false;
+}
 std::vector<Breakpoint> GpgxBackend::getBreakpoints() { std::lock_guard<std::mutex> lk(bpMutex_); return breakpoints_; }
 
 // ---------------------------------------------------------------------------
@@ -946,8 +1021,6 @@ void GpgxBackend::firePause(uint32_t pc, Cpu cpu, int bpId, StopReason why)
 // them it is now looking at.
 int GpgxBackend::matchBreakpoint(int type, uint32_t addr, int width)
 {
-    if (bpCount_.load(std::memory_order_relaxed) == 0) return -1;   // hot path
-
     // A VDP access carries an address in the VDP linear space, so it may only
     // match breakpoints marked is_vdp — and a bus breakpoint must never be
     // triggered by one. Without this the two address spaces alias and VDP
@@ -964,6 +1037,10 @@ int GpgxBackend::matchBreakpoint(int type, uint32_t addr, int width)
     const bool isWrite = (type & (HOOK_M68K_W | HOOK_Z80_W
                                 | HOOK_VRAM_W | HOOK_CRAM_W | HOOK_VSRAM_W)) != 0;
     const bool isExec  = (type & (HOOK_M68K_E | HOOK_Z80_E)) != 0;
+
+    // Hot path, no lock: nothing can match here.
+    if (isExec ? !execMayHit(cpu, addr, width) : rwCount_.load(std::memory_order_relaxed) == 0)
+        return -1;
 
     // Collect matches under the lock, evaluate conditions outside it: the
     // evaluator calls into the client (IDA), which must not be done while

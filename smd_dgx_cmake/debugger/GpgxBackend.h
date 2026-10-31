@@ -3,6 +3,7 @@
 #include <atomic>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 
 class GpgxBackend;
@@ -202,9 +203,19 @@ private:
 
     std::mutex bpMutex_;
     std::vector<Breakpoint> breakpoints_;
-    // Read on every instruction of both CPUs, so the common "no breakpoints"
-    // case must not touch the mutex at all.
-    std::atomic<int> bpCount_ {0};
+    // Consulted on every instruction and every memory access, so they must
+    // answer "no breakpoint here" without the mutex or a scan of the list:
+    // counts of enabled breakpoints by kind, and for execute breakpoints a bit
+    // per address (68000: 24-bit space, Z80: 16-bit), set where at least one
+    // enabled breakpoint covers it. Written under bpMutex_.
+    std::atomic<int> exec68kCount_ {0};
+    std::atomic<int> execZ80Count_ {0};
+    std::atomic<int> rwCount_ {0};          // read/write breakpoints, any space
+    std::unique_ptr<std::atomic<uint8_t>[]> exec68kMap_;   // 1 << 21 bytes
+    std::unique_ptr<std::atomic<uint8_t>[]> execZ80Map_;   // 1 << 13 bytes
+    void indexBreakpoints(const Breakpoint* removed);       // bpMutex_ held
+    void markExec(const Breakpoint& b, bool on);            // bpMutex_ held
+    bool execMayHit(Cpu cpu, uint32_t addr, int width) const;
     int nextBpId_ = 1;
     uint32_t lastPc_ = 0;
     // 68000 instructions retired (emulation thread only), and the count at the

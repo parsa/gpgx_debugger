@@ -1486,3 +1486,42 @@ TEST(speed_max_runs_unpaced_with_identical_results)
     CHECK_STR(fastCase, pacedCase);                           // same registers, diff, log
     std::remove(path.c_str());
 }
+
+// ---------------------------------------------------------------------------
+// Breakpoint cost: a recorder arms an execute breakpoint on every routine entry
+// it still needs (the pocahontas-decomp one wanted thousands). Checking them
+// must not cost a scan of the whole list on every instruction and every memory
+// access, or the machine crawls exactly when it is being recorded.
+// ---------------------------------------------------------------------------
+TEST(many_execute_breakpoints_cost_little)
+{
+    Wired w(48);
+    REQUIRE(w.ok);
+    Raw raw;
+    REQUIRE(raw.connect(portFor(48)));
+    REQUIRE(raw.cmd("ping").rfind("ok", 0) == 0);
+    REQUIRE(raw.cmd("speed max") == "ok speed=max");
+
+    auto frames = [&](int n) -> long long {
+        const auto t0 = std::chrono::steady_clock::now();
+        CHECK(raw.cmd("frameadv " + std::to_string(n)) == "ok");
+        CHECK(raw.cmd("wait 60000").find(" reason=frame") != std::string::npos);
+        return msSince(t0);
+    };
+    frames(60);                                          // warm up
+    const long long none = frames(600);
+    // 1500 breakpoints on addresses the program never executes, as on routines
+    // that have not run yet.
+    for (int i = 0; i < 1500; ++i)
+        REQUIRE(raw.cmd("bpadd x " + hex(0x1000 + 2 * i)).rfind("ok ", 0) == 0);
+    const long long many = frames(600);
+    std::printf("    600 frames: %lld ms without breakpoints, %lld ms with 1500\n", none, many);
+    CHECK(many < none * 2 + 50);
+    // They still work: one on the loop is hit at once.
+    REQUIRE(raw.cmd("bpadd x 218").rfind("ok ", 0) == 0);
+    REQUIRE(raw.cmd("resume").rfind("ok", 0) == 0);
+    CHECK(raw.cmd("wait 3000").find(" reason=breakpoint") != std::string::npos);
+    CHECK_EQ(w.emu.backend()->getM68kRegs().pc & 0xFFFFFF, 0x218u);
+    raw.cmd("bpclear");
+    raw.cmd("speed realtime");
+}
