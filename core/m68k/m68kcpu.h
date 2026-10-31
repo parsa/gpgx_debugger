@@ -786,6 +786,9 @@ INLINE void m68ki_branch_8(uint offset);
 INLINE void m68ki_branch_16(uint offset);
 INLINE void m68ki_branch_32(uint offset);
 INLINE void m68ki_check_odd_target(uint target, uint stacked_pc);
+#if M68K_EMULATE_ADDRESS_ERROR
+INLINE void m68ki_exception_odd_vector(uint vector, uint handler);
+#endif
 INLINE void m68ki_jump_checked(uint new_pc);
 
 /* Status register operations. */
@@ -1211,15 +1214,24 @@ INLINE void m68ki_jump_vector(uint vector)
      stacking the vector's own address as PC (a bus or address error vector
      that is odd halts: see m68ki_exception_address_error). */
   if ((REG_PC & 1) && m68ki_cpu.aerr_enabled)
-  {
-    m68ki_cpu.aerr_address = REG_PC;
-    m68ki_cpu.aerr_write_mode = MODE_READ;
-    m68ki_cpu.aerr_fc = FLAG_S | FUNCTION_CODE_USER_PROGRAM;
-    REG_PC = vector << 2;
-    m68ki_exception_address_error();
-  }
+    m68ki_exception_odd_vector(vector, REG_PC);
 #endif
 }
+
+#if M68K_EMULATE_ADDRESS_ERROR
+/* The handler fetched from an exception vector is odd: the 68000 takes an
+   address error fetching it (on top of the frame already stacked), with the
+   vector's own address as PC. Not a longjmp: interrupts are also taken
+   outside m68k_run's address error trap. */
+INLINE void m68ki_exception_odd_vector(uint vector, uint handler)
+{
+  m68ki_cpu.aerr_address = handler;
+  m68ki_cpu.aerr_write_mode = MODE_READ;
+  m68ki_cpu.aerr_fc = FLAG_S | FUNCTION_CODE_USER_PROGRAM;
+  REG_PC = vector << 2;
+  m68ki_exception_address_error();
+}
+#endif
 
 
 /* Branch to a new memory location.
@@ -1515,7 +1527,10 @@ INLINE void m68ki_exception_interrupt(uint int_level)
 
   /* If vector is uninitialized, call the uninitialized interrupt vector */
   if(new_pc == 0)
+  {
+    vector = EXCEPTION_UNINITIALIZED_INTERRUPT;
     new_pc = m68ki_read_32((EXCEPTION_UNINITIALIZED_INTERRUPT<<2));
+  }
 
   if (!dbg_in_interrupt) {
     dbg_in_interrupt = 1;
@@ -1526,6 +1541,16 @@ INLINE void m68ki_exception_interrupt(uint int_level)
   m68ki_stack_frame_3word(REG_PC, sr);
 
   m68ki_jump(new_pc);
+
+#if M68K_EMULATE_ADDRESS_ERROR
+  /* An odd handler: address error, as for any vector. The 68000 stacks the
+     vector number as IR for an interrupt (I/N = 1 from above). */
+  if ((new_pc & 1) && m68ki_cpu.aerr_enabled)
+  {
+    REG_IR = vector;
+    m68ki_exception_odd_vector(vector, new_pc);
+  }
+#endif
 
   /* Update cycle count now */
   USE_CYCLES(m68ki_cycle_interrupts[(m68ki_cpu.cycles / MUL) % 10]);

@@ -34,6 +34,7 @@ static unsigned char m68ki_cycles[0x10000];
 #endif
 
 static int irq_latency;
+static unsigned int irq_latency_level;   /* the level set once the delayed instruction is done */
 
 m68ki_cpu_core m68k;
 
@@ -259,6 +260,7 @@ void m68k_set_irq_delay(unsigned int int_level)
 
       /* One instruction delay before interrupt */
       irq_latency = 1;
+      irq_latency_level = int_level;
       m68ki_trace_t1() /* auto-disable (see m68kcpu.h) */
       m68ki_use_data_space() /* auto-disable (see m68kcpu.h) */
       m68ki_instr_hook(); /* auto-disable (see m68kcpu.h) */
@@ -319,7 +321,20 @@ void m68k_run(unsigned int cycles)
   m68k.cycle_end = cycles;
 
   /* Return point for when we have an address error (TODO: use goto) */
-  m68ki_set_address_error_trap() /* auto-disable (see m68kcpu.h) */
+#if M68K_EMULATE_ADDRESS_ERROR
+  if (setjmp(m68ki_cpu.aerr_trap) != 0)
+  {
+    /* The instruction m68k_set_irq_delay runs before raising the IRQ level
+       faulted: finish that bookkeeping, or the latency stays set and later
+       IRQ level changes through it are lost. */
+    if (irq_latency)
+    {
+      irq_latency = 0;
+      CPU_INT_LEVEL = irq_latency_level << 8;
+    }
+    m68ki_exception_address_error();
+  }
+#endif
   m68k_in_instruction = 0;   /* also when an address error unwound an instruction */
 
 #ifdef LOGERROR

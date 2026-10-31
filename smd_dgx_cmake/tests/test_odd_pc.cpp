@@ -8,7 +8,9 @@
 #include "test_harness.h"
 #include "fixture.h"
 
+#include <chrono>
 #include <cstring>
+#include <thread>
 
 using namespace synth;
 
@@ -234,4 +236,81 @@ TEST(an_odd_exception_vector_is_an_address_error)
     CHECK_EQ(f.spBefore, kSsp - 6);                           // the trap's own frame below it
     CHECK_EQ(unsigned(f.status & 0x1F), 0x16u);
     REQUIRE(e.backend()->writeMemory(34 * 4, saved.data(), 4));
+}
+
+namespace {
+// move.w #$81xx,$C00004.l: VDP register 1 (0x64: display, VINT on; 0x44: VINT off)
+std::vector<uint8_t> vdpReg1(uint8_t v) { return {0x33, 0xFC, 0x81, v, 0x00, 0xC0, 0x00, 0x04}; }
+// Let frames run with VINT off (the synthetic ROM never enables it): a VBlank
+// is then pending, and enabling VINT raises level 6.
+bool vblankPending(t::Emu& e)
+{
+    e.backend()->resume();
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    return e.pauseAndWait();
+}
+}
+
+TEST(an_odd_interrupt_vector_is_an_address_error)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+    REQUIRE(vblankPending(e));
+    // Enabling VINT then raises level 6 (autovector 30) through an odd handler.
+    const auto saved = e.backend()->readMemory(30 * 4, 4);
+    const uint8_t odd[] = {0x00, 0x00, 0x06, 0x01};
+    REQUIRE(e.backend()->writeMemory(30 * 4, odd, 4));
+    Frame f = run(e, vdpReg1(0x64), [](M68kRegs& r) { r.sr = 0x2000; });
+    CHECK(f.faulted);
+    CHECK_EQ(f.address, 0x000601u);
+    CHECK_EQ(f.stackedPc, 30u * 4);                  // the vector's own address
+    CHECK_EQ(unsigned(f.ir), 30u);                   // an interrupt stacks its vector number
+    CHECK_EQ(unsigned(f.status & 0x1F), 0x1Eu);      // read, not an instruction (I/N=1), program
+    CHECK_EQ(unsigned(f.sr & 0xFF00), 0x2600u);      // interrupt mask already raised
+    CHECK_EQ(f.spBefore, kSsp - 6);                  // the interrupt's own frame below it
+    REQUIRE(e.backend()->writeMemory(30 * 4, saved.data(), 4));
+}
+
+// The instruction run between enabling a pending interrupt and raising its
+// level (the one-instruction IRQ latency m68k_set_irq_delay emulates) can
+// itself fault: the level must still be raised, and later interrupts through
+// that path must still come one instruction after they are enabled.
+TEST(a_fault_in_the_irq_latency_instruction_keeps_interrupts_working)
+{
+    t::Emu e;
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+    REQUIRE(vblankPending(e));
+    auto code = vdpReg1(0x64);
+    code.insert(code.end(), {0x4E, 0xD0});           // jmp (a0): the delayed instruction, odd target
+    Frame f = run(e, code, [](M68kRegs& r) { r.sr = 0x2700; r.a[0] = 0xFF0201; });
+    CHECK(f.faulted);
+    CHECK_EQ(f.stackedPc, P + 10);
+    // Interrupts still arrive through the latency path: VINT off, then on with
+    // interrupts unmasked must take VBlank (autovector 30 -> the ROM's handler).
+    auto again = vdpReg1(0x44);                      // level back to 0
+    again.insert(again.end(), {0x46, 0xFC, 0x20, 0x00});   // move #$2000,sr: unmask
+    const auto on = vdpReg1(0x64);                   // pending VBlank: raised after one instruction
+    again.insert(again.end(), on.begin(), on.end());
+    again.insert(again.end(), {0x52, 0x81, 0x60, 0xFC});   // addq.l #1,d1; bra.s -4
+    REQUIRE(e.backend()->writeMemory(P + 0x40, again.data(), uint32_t(again.size())));
+    M68kRegs r = e.backend()->getM68kRegs();
+    r.pc = P + 0x40;
+    r.sr = 0x2700;                  // the code unmasks once the level is back to 0
+    r.a[7] = kSsp;
+    r.d[1] = 0;
+    e.backend()->setM68kRegs(r);
+    e.backend()->resume();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    REQUIRE(e.pauseAndWait());
+    const M68kRegs after = e.backend()->getM68kRegs();
+    if (!(after.pc >= kExcHandler && after.pc < kExcHandler + 4))
+        std::printf("    pc=%06X sr=%04X\n", after.pc, after.sr);
+    CHECK(after.pc >= kExcHandler && after.pc < kExcHandler + 4);   // in the VBlank handler
+    CHECK_EQ(unsigned(after.sr & 0x0700), 0x0600u);
+    // ...taken one instruction after enabling it (the latency path), not at
+    // some later VBlank: the counting loop ran exactly once.
+    CHECK_EQ(after.d[1], 1u);
+    e.gpgx()->setExceptionCatch(0);
 }
