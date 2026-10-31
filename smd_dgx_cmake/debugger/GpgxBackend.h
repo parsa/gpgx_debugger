@@ -211,6 +211,8 @@ private:
     std::atomic<int> exec68kCount_ {0};
     std::atomic<int> execZ80Count_ {0};
     std::atomic<int> rwCount_ {0};          // read/write breakpoints, any space
+    // Allocated (zeroed) by the constructor and never replaced, so the
+    // emulation thread may read them without synchronising with their creation.
     std::unique_ptr<std::atomic<uint8_t>[]> exec68kMap_;   // 1 << 21 bytes
     std::unique_ptr<std::atomic<uint8_t>[]> execZ80Map_;   // 1 << 13 bytes
     void indexBreakpoints(const Breakpoint* removed);       // bpMutex_ held

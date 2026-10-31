@@ -51,7 +51,11 @@ static unsigned int readFilterShim(int width, unsigned int addr, unsigned int va
 // be a race. With no overrides it returns the value untouched (one relaxed
 // load), and it only ever sees reads that go through an I/O handler.
 GpgxBackend::GpgxBackend()
+    : exec68kMap_(new std::atomic<uint8_t>[size_t(1) << 21]),
+      execZ80Map_(new std::atomic<uint8_t>[size_t(1) << 13])
 {
+    for (size_t i = 0; i < (size_t(1) << 21); ++i) exec68kMap_[i].store(0, std::memory_order_relaxed);
+    for (size_t i = 0; i < (size_t(1) << 13); ++i) execZ80Map_[i].store(0, std::memory_order_relaxed);
     g_gpgxBackend = this;
     set_cpu_hook(cpuHookShim);
     set_cpu_read_filter(readFilterShim);
@@ -478,12 +482,6 @@ void GpgxBackend::markExec(const Breakpoint& b, bool on)
     const bool z80 = b.cpu == Cpu::Z80;
     auto& map = z80 ? execZ80Map_ : exec68kMap_;
     const uint32_t mask = z80 ? 0xFFFFu : 0xFFFFFFu;
-    if (!map) {
-        if (!on) return;
-        const size_t bytes = (size_t(mask) + 1) / 8;
-        map.reset(new std::atomic<uint8_t>[bytes]);
-        for (size_t i = 0; i < bytes; ++i) map[i].store(0, std::memory_order_relaxed);
-    }
     if (b.end < b.start) return;
     const uint32_t first = b.start & mask, last = std::min(b.end, mask);
     for (uint32_t a = first; ; ++a) {
@@ -520,7 +518,6 @@ bool GpgxBackend::execMayHit(Cpu cpu, uint32_t addr, int width) const
     const bool z80 = cpu == Cpu::Z80;
     if ((z80 ? execZ80Count_ : exec68kCount_).load(std::memory_order_relaxed) == 0) return false;
     const auto& map = z80 ? execZ80Map_ : exec68kMap_;
-    if (!map) return false;
     const uint32_t mask = z80 ? 0xFFFFu : 0xFFFFFFu;
     for (int i = 0; i < (width > 0 ? width : 1); ++i) {
         const uint32_t a = (addr + uint32_t(i)) & mask;

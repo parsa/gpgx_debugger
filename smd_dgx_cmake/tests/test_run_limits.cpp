@@ -368,3 +368,50 @@ TEST(frame_budget_stops_after_that_many_frames)
     const uint64_t ran = e.host()->frameCount() - f0;
     CHECK(ran >= 3 && ran <= 4);
 }
+
+// Unpaced frames are the same machine: with an audio device attached, the
+// sound chips still advance every frame (only delivering the samples stops),
+// so a stretch run unpaced ends in exactly the state a paced run does.
+TEST(speed_max_keeps_the_sound_chips_running)
+{
+    t::Emu e;
+    std::atomic<int> delivered{0};
+    e.host()->setAudioSink([&](const int16_t*, int) { ++delivered; });
+    REQUIRE(e.start());
+    REQUIRE(e.pauseAndWait());
+    const char* tmp = std::getenv("TMPDIR");
+    const std::string dir = std::string(tmp ? tmp : ".");
+    const std::string s0 = dir + "/smd_dgx_snd0.state", s1 = dir + "/smd_dgx_snd1.state",
+                      s2 = dir + "/smd_dgx_snd2.state";
+    REQUIRE(e.backend()->saveState(s0.c_str()));
+    auto advance = [&](int n) {
+        const uint64_t s = e.pauseSeq();
+        e.host()->advanceFrames(n);
+        e.backend()->resume();
+        return e.waitPause(s, 10000);
+    };
+    REQUIRE(advance(30));
+    REQUIRE(e.backend()->saveState(s1.c_str()));
+    const int pacedDelivered = delivered.load();
+    REQUIRE(e.backend()->loadState(s0.c_str()));
+    e.host()->setUnpaced(true);
+    const int before = delivered.load();
+    REQUIRE(advance(30));
+    e.host()->setUnpaced(false);
+    REQUIRE(e.backend()->saveState(s2.c_str()));
+    auto bytes = [](const std::string& p) {
+        std::FILE* f = std::fopen(p.c_str(), "rb");
+        std::vector<uint8_t> v;
+        if (!f) return v;
+        int c;
+        while ((c = std::fgetc(f)) != EOF) v.push_back(uint8_t(c));
+        std::fclose(f);
+        return v;
+    };
+    const auto a = bytes(s1), b = bytes(s2);
+    REQUIRE(!a.empty());
+    CHECK(a == b);
+    CHECK(pacedDelivered > 0);
+    CHECK_EQ(delivered.load(), before);          // nothing delivered while unpaced
+    std::remove(s0.c_str()); std::remove(s1.c_str()); std::remove(s2.c_str());
+}

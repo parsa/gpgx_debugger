@@ -126,10 +126,13 @@ void EmuHost::run(std::string /*romPath*/)
         }
 
         const bool unpaced = unpaced_.load();
-        if (audioSink_ && !unpaced && snd.enabled && snd.blips[0]) {
+        if (audioSink_ && snd.enabled && snd.blips[0]) {
+            // audio_update also advances the sound chips (FM busy flag, cycle
+            // counters): it must run every frame. Unpaced, only the samples
+            // are not delivered: nothing could play them at that rate.
             static int16_t audioBuf[2048 * 2];   // stereo, gx::SOUND_SAMPLES_SIZE
             const int frames = audio_update(audioBuf);
-            if (frames > 0)
+            if (frames > 0 && !unpaced)
                 audioSink_(audioBuf, frames);
         }
 
